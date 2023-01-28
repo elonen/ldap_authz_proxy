@@ -1,0 +1,54 @@
+[package]
+name = "ldap_authz_proxy"
+version = "0.1.0"
+edition = "2021"
+
+description = "LDAP authorization proxy for authenticated HTTP users"
+homepage = "https://github.com/elonen/ldap_authz_proxy"
+license = "MIT"
+readme = "README.md"
+
+
+[package.metadata.deb]
+
+maintainer = "Jarno Elonen <elonen@iki.fi>"
+copyright = "2023, Jarno Elonen <elonen@iki.fi>"
+section = "unknown"
+changelog = "debian/changelog"
+
+depends = "$auto"
+
+extended-description = """\
+LDAP authorization server/proxy for use with (e.g.) Nginx.
+Extracts usernames from HTTP headers and performs LDAP queries
+to authorize them agains Active Directory or other user databases.
+"""
+
+maintainer-scripts = "debian"
+assets = [
+    ["target/release/ldap_authz_proxy", "usr/bin/", "755"],
+    ["README.md", "usr/share/doc/ldap_authz_proxy/README", "644"],
+    ["test/nginx-site.conf", "usr/share/doc/ldap_authz_proxy/examples/", "644"],
+    ["example.ini", "etc/ldap_authz_proxy.conf", "640"],
+]
+conf-files = ["/etc/ldap_authz_proxy.conf"]
+systemd-units = { enable = false }
+
+
+[[bin]]
+name = "ldap_authz_proxy"
+path = "src/main.rs"
+
+[dependencies]
+anyhow = "1.0.68"
+configparser = "3.0.2"
+docopt = "1.1.1"
+hyper = { version = "0.14.23", features = ["full"] }
+ldap3 = "0.11.1"
+lru_time_cache = "0.11.11"
+regex = "1.7.1"
+sha2 = "0.10.6"
+tokio = { version = "1.24.2", features = ["full"] }
+tracing = "0.1.37"
+tracing-appender = "0.2.2"
+tracing-subscriber = {version = "0.3.16", features = ["env-filter", "json"] }

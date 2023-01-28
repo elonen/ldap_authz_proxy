@@ -1,0 +1,16 @@
+#!/bin/sh
+
+# Cargo.toml apparently doesn't allow setting owner/group for files, so we do it here
+
+chown root:www-data /etc/ldap_authz_proxy.conf
+chmod 640 /etc/ldap_authz_proxy.conf
+
+if [ ! -f /var/log/ldap_authz_proxy.log ]; then
+    touch /var/log/ldap_authz_proxy.log
+fi
+chown root:www-data /var/log/ldap_authz_proxy.log
+chmod 660 /var/log/ldap_authz_proxy.log
+
+#DEBHELPER#
+
+exit 0
