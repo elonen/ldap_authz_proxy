@@ -6,7 +6,7 @@ echo "Starting Active Directory (Samba), Nginx and LDAP authz proxy in Docker Co
 echo "----------------------------------------------------------------------------------"
 
 cd test
-docker compose build
+DOCKER_BUILDKIT=1 docker compose build
 docker compose up -d
 
 # Make sure we stop the containers when we exit, regardless of how

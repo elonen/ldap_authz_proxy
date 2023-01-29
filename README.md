@@ -1,13 +1,17 @@
 # ldap_authz_proxy - LDAP authorization proxy for authenticated HTTP users
 
-Helper that allows Nginx to lookup from Active Directory / LDAP
-if a user is authorized to access some resource -- _after_ the user
-has been authenticated by some other means (Kerberos, Basic auth, Token
-etc).
+[![Build Status](https://app.travis-ci.com/elonen/ldap_authz_proxy.svg?branch=master)](https://app.travis-ci.com/elonen/ldap_authz_proxy)
+[![Release](https://img.shields.io/github/v/release/elonen/ldap_authz_proxy?include_prereleases)]()
 
-Technically it is a small HTTP server that reads usernames from request headers and performs
-configured LDAP queries with them, returning status 200 if query succeeded or
-403 if it failed. Results are cached for a configurable amount of time.
+A helper that allows Nginx to lookup from Active Directory / LDAP
+if a user is authorized to access some resource, _after_ said user
+has been authenticated by some other means (Kerberos, Basic auth, Token, ...).
+
+Technically it's a small HTTP server that reads usernames from request headers
+and performs configured LDAP queries with them, returning status 200 if query
+succeeded or 403 if it failed; an HTTP->LDAP proxy of sorts.
+Nginx can auth against such a thing with the ´auth_request`
+directive. Results are cached for a configurable amount of time.
 
 ## Configuration
 
@@ -52,7 +56,7 @@ Resulting binary is `target/release/ldap_authz_proxy`.
 The server can be run with `ldap_authz_proxy <configfile>`. Additional
 options are available, see `--help` for details.
 
-The executable will stay in foreground, so it is recommended to run it
+The executable will stay in foreground, so it's recommended to run it
 with a process manager such as `systemd` or `supervisord`. Example
 `systemd` service file is included in `debian/service`.
 
@@ -66,7 +70,7 @@ world-readable. The server itself doesn't need to be able to write
 to the configuration file.
 
 Usernames are quoted before being used in LDAP queries, so they (hopefully)
-can't be used to inject arbitrary LDAP queries. In any case, it is recommended
+can't be used to inject arbitrary LDAP queries. In any case, it's recommended
 to use a read-only LDAP bind user just in case.
 
 LDAPS is supported (even though the test scripts use plain ldap://), and is
@@ -104,8 +108,8 @@ _ldap_authz_proxy_:
 ```nginx
 server {
         listen 443 ssl;
-        ssl_certificate     /etc/ssl/private/example.com.fullchain.pem;
-        ssl_certificate_key /etc/ssl/private/example.com.privkey.pem;
+        ssl_certificate     /etc/ssl/private/www.example.com.fullchain.pem;
+        ssl_certificate_key /etc/ssl/private/www.example.com.privkey.pem;
 
         server_name www.example.com;
 
@@ -118,9 +122,6 @@ server {
         auth_gss_service_name HTTP/www.example.com;
 
         auth_request    /authz_all;
-
-        proxy_set_header X-Remote-User-Id $remote_user;
-        proxy_set_header X-Remote-User-Name $remote_user;
 
         location = /authz_all {
             internal;
@@ -162,7 +163,7 @@ cd ..
 sed -i 's@ldap_server_url *=.*@ldap_server_url = ldap://127.0.0.1:3890@' example.ini
 cargo run -- example.ini --debug &
 
-# Test request
+# Test request directly against ldap_authz_proxy
 curl http://127.0.0.1:10567/admins -H "X-Ldap-Authz-Username:alice"
 
 # Cleanup
