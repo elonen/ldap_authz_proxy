@@ -112,7 +112,7 @@ Nginx reverse proxy. It spins up necessary containers, and then performs
 Curl HTTP requests against Nginx, comparing their HTTP response status codes to
 expected values.
 
-## Ngix configuration
+## Nginx configuration
 
 See `test/nginx-site.conf` for a simple example where users are authenticated
 with the Basic method and then authorized with this server using _auth_request_ directive.
