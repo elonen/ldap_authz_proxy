@@ -7,9 +7,12 @@ A helper that allows Nginx to lookup from Active Directory / LDAP
 if a user is authorized to access some resource, _after_ said user
 has been authenticated by some other means (Kerberos, Basic auth, Token, ...).
 
+Optionally, it can also return user attributes (such as name, email, etc) to Nginx
+in HTTP headers.
+
 Technically it's a small HTTP server that reads usernames from request headers
 and performs configured LDAP queries with them, returning status 200 if query
-succeeded or 403 if it failed; an HTTP->LDAP proxy of sorts.
+succeeded or 403 if it failed; an HTTP<>LDAP proxy of sorts.
 Nginx can auth against such a thing with the ´auth_request`
 directive. Results are cached for a configurable amount of time.
 
@@ -19,15 +22,15 @@ The server is configured with an INI file, such as:
 
 ```ini
 [default]
-ldap_server_url = ldap://dc1.example.test
+ldap_server_url = ldap://dc1.example.test:389
 ldap_conn_timeout = 10.0
 ldap_bind_dn = CN=service,CN=Users,DC=example,DC=test
 ldap_bind_password = password123
 ldap_search_base = DC=example,DC=test
 
-ldap_cache_size = 1024
+ldap_return_attribs = displayName, givenName, sn, mail
 ldap_cache_time = 30
-
+ldap_cache_size = 512
 username_http_header = X-Ldap-Authz-Username
 
 [users]
@@ -45,6 +48,27 @@ rule and settings to apply if it matches. The `http_path` value is a regular exp
 that is tested against HTTP requests. If it matches, `ldap_query` from that section
 is executed after replacing `%USERNAME%` with the username from `username_http_header` HTTP header.
 If the LDAP query succeeds, server returns status 200, otherwise 403.
+
+The `ldap_return_attribs`, if not empty, specifies a comma-separated list of LDAP
+attributes to return to Nginx in HTTP headers. The header names are prefixed with
+`X-Ldap-Authz-Res-`, so for example `displayName` attribute is returned in
+`X-Ldap-Authz-Res-displayName` header. Use `ldap_return_attribs = *` to return all
+attributes (mainly useful for debugging).
+
+If LDAP query returns multiple results, the first one is used. To see all results,
+use `--debug` option to write them to log.
+
+## Cache
+
+The server uses a simple in-memory cache to avoid performing the same LDAP queries
+over and over again. Cache size is limited to `ldap_cache_size` entries, and
+entries are removed in LRU order. Cache time is `ldap_cache_time` seconds.
+One cache entry is created for each unique username, so ldap_cache_size should
+be large enough to accommodate all users that might be accessing the server simultaneously.
+A cache entry takes probably about 1kB of RAM, unless you requested all LDAP attributes.
+
+Technically, each config section gets its own cache, so you can have different cache sizes and
+retention times for different sections.
 
 ## Building
 
@@ -107,10 +131,11 @@ This is the recommended way to install it when applicable.
 
 Use `./run-tests.sh` to execute test suite. It requires `docker compose`
 and `curl`. The script performs an end-to-end integratiot test with a
-real LDAP server (Active Directory in this case, using Samba) and an
-Nginx reverse proxy. It spins up necessary containers, and then performs
-Curl HTTP requests against Nginx, comparing their HTTP response status codes to
-expected values.
+real Active Directory server and an Nginx reverse proxy.
+
+It spins up necessary containers, sets up example users, and then performs
+Curl HTTP requests against Nginx, comparing their HTTP response status codes
+and headers to expected values.
 
 ## Nginx configuration
 
@@ -120,8 +145,8 @@ with the Basic method and then authorized with this server using _auth_request_ 
 ### Kerberos
 
 This software was originally developed for Active Directory auth using
-Nginx, so here's a complementary real-world example on how to authenticate users against AD with
-Kerberos (spnego-http-auth-nginx-module) and to then authorize them using
+Nginx, so here's a complementary example on how to authenticate some API users
+against AD with Kerberos (spnego-http-auth-nginx-module) and to then authorize them using
 _ldap_authz_proxy_:
 
 ```nginx
@@ -140,7 +165,8 @@ server {
         auth_gss_force_realm on;
         auth_gss_service_name HTTP/www.example.com;
 
-        auth_request    /authz_all;
+        auth_request     /authz_all;
+        auth_request_set $display_name  $upstream_http_x_ldap_res_displayname;
 
         location = /authz_all {
             internal;
@@ -150,10 +176,15 @@ server {
             proxy_set_header        X-Ldap-Authz-Username $remote_user;
         }
 
-        location / {
-                root /var/www/;
-                index index.html;
-                try_files $uri $uri/ =404;
+        location /api {
+                proxy_pass http://127.0.0.1:8095/api;
+
+                # Pass authenticated username to backend
+                proxy_set_header X-Remote-User-Id $remote_user;
+                proxy_set_header X-Remote-User-Name $display_name;
+
+                proxy_set_header X-Real-IP $remote_addr;
+                proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
         }
 }
 ```

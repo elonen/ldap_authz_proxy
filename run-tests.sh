@@ -47,8 +47,10 @@ echo "---------------------------------------------"
 function request() {
     FOLDER="$1"
     CREDS="$2"
-    RES=$(curl --write-out '%{http_code}' --silent --output /dev/null http://127.0.0.1:8090/$FOLDER/ -u "$CREDS")
-    echo "$RES"
+    RES=$(curl -s http://127.0.0.1:8090/$FOLDER/ -u "$CREDS" -I)
+    HTTP_CODE=$(grep HTTP <<< """$RES""" | awk '{print $2}' | tr -d '\r\n')
+    DISPLAY_NAME=$(grep 'X-Display-Name' <<< """$RES""" | sed 's/^.*: //' | tr -d '\r\n') || true
+    echo "${HTTP_CODE}${DISPLAY_NAME}"
 }
 
 function test() {
@@ -64,12 +66,12 @@ function test() {
 }
 
 function do_tests() {
-    test "user-page" "alice:alice" "200"
+    test "user-page" "alice:alice" "200Alice Alison"
     test "admin-page" "alice:alice" "200"
     test "user-page" "alice:BADPASSWORD" "401"
     test "admin-page" "alice:BADPASSWORD" "401"
 
-    test "user-page" "bob:bob" "200"
+    test "user-page" "bob:bob" "200Bob Bobrikov"
     test "admin-page" "bob:bob" "403"
     test "user-page" "bob:BADPASSWORD" "401"
     test "admin-page" "bob:BADPASSWORD" "401"

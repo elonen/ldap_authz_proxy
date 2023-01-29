@@ -1,7 +1,10 @@
 use std::collections::HashMap;
 use std::net::SocketAddr;
+use std::str::FromStr;
 use std::sync::Arc;
 use config::ConfigSection;
+use hyper::header::HeaderName;
+use hyper::http::HeaderValue;
 use hyper::service::service_fn;
 use hyper::{Request, Response, Body, StatusCode};
 use tokio::net::TcpListener;
@@ -38,7 +41,8 @@ Options:
 "#;
 
 type Sha256Hash = sha2::digest::generic_array::GenericArray<u8, sha2::digest::generic_array::typenum::U32>;
-type LdapCache = LruCache<Sha256Hash, bool>;  // <cache_key, found>
+type LdapSearchRes = Option<HashMap<String, String>>; // HashMap<attr_name, attr_value> or None if not found
+type LdapCache = LruCache<Sha256Hash, LdapSearchRes>;
 
 struct ReqContext {
     config: Vec<ConfigSection>,
@@ -46,7 +50,7 @@ struct ReqContext {
 }
 
 struct LdapAnswer {
-    found: bool,
+    ldap_res: LdapSearchRes,
     cached: bool,
 }
 
@@ -64,9 +68,9 @@ async fn ldap_check(conf: &ConfigSection, username: &str, cache: &Arc<Mutex<Ldap
         let mut hasher = Sha256::new();
         hasher.update(format!("{}:{}", conf.ldap_server_url, query));
         let cache_key = hasher.finalize();
-        if let Some(found) = cache.lock().await.get(&cache_key) {
+        if let Some(res) = cache.lock().await.get(&cache_key) {
             tracing::debug!("Cache hit. Skipping LDAP.");
-            return Ok(LdapAnswer { found: *found, cached: true });
+            return Ok(LdapAnswer { ldap_res: res.clone(), cached: true });
         } else {
             tracing::debug!("Not cached. Performing real query.");
         }
@@ -85,7 +89,7 @@ async fn ldap_check(conf: &ConfigSection, username: &str, cache: &Arc<Mutex<Ldap
             conf.ldap_search_base.as_str(),
             Scope::Subtree,
             query.as_str(),
-            vec!["l"]
+            &conf.ldap_return_attribs
         ).await?.success()
     {
         Ok(res) => res,
@@ -94,13 +98,28 @@ async fn ldap_check(conf: &ConfigSection, username: &str, cache: &Arc<Mutex<Ldap
             return Err(e)
         }
     };
-    let found = !&rs.is_empty();
-    for entry in rs {
-        tracing::debug!("LDAP result: {:?}", SearchEntry::construct(entry));
-    }
     ldap.unbind().await?;
-    cache.lock().await.insert(cache_key, found);
-    Ok(LdapAnswer { found, cached: false })
+
+    // Store first row in a HashMap and log all other rows
+    let row_i = 0;
+    let mut attribs = HashMap::new();
+    for row in rs {
+        let se = SearchEntry::construct(row);
+        if row_i > 0 {
+            tracing::debug!("Skipped additional result row #{}: {:?}", row_i, se);
+        } else {
+            tracing::debug!("First result row: {:?}", se);
+            for (key, vals) in se.attrs {
+                let vals_comb = vals.iter().map(|v| v.as_str()).collect::<Vec<&str>>().join(", ");
+                attribs.insert(key, vals_comb);
+            }
+        }
+    }
+
+    // Update cache and return
+    let ldap_res = if attribs.is_empty() { None } else { Some(attribs) };
+    cache.lock().await.insert(cache_key, ldap_res.clone());
+    Ok(LdapAnswer { ldap_res, cached: false })
 }
 
 
@@ -156,9 +175,30 @@ async fn http_handler(req: Request<Body>, ctx: Arc<ReqContext>) -> Result<Respon
         },
         Ok(la) => {
             let span = span.record("cached", &la.cached);
-            return if la.found {
+            return if let Some(ldap_res) = la.ldap_res {
                 span.in_scope(|| { tracing::info!("User authorized Ok"); });
-                Ok(Response::new(Body::from("200 OK - LDAP result found")))
+                let mut resp = Response::new(Body::from("200 OK - LDAP result found"));
+
+                // Store LDAP result attributes to response HTTP headers
+                for (key, val) in ldap_res.iter() {
+                    let hname = match HeaderName::from_str(format!("X-LDAP-RES-{}", key).as_str()) {
+                        Ok(hname) => hname,
+                        Err(_) => {
+                            span.in_scope(|| { tracing::error!("Invalid LDAP result key: {}", key); });
+                            return Response::builder().status(StatusCode::INTERNAL_SERVER_ERROR).body(Body::from("Invalid LDAP result key"))
+                        }
+                    };
+                    let hval = match HeaderValue::from_str(val.as_str()) {
+                        Ok(hval) => hval,
+                        Err(_) => {
+                            span.in_scope(|| { tracing::error!("Invalid LDAP result value: {}", val); });
+                            return Response::builder().status(StatusCode::INTERNAL_SERVER_ERROR).body(Body::from("Invalid LDAP result value"))
+                        }
+                    };
+                    span.in_scope(|| { tracing::debug!("Adding result HTTP header: {:?} = {:?}", hname, hval); });
+                    resp.headers_mut().insert(hname, hval);
+                }
+                Ok(resp)
             } else {
                 span.in_scope(|| { tracing::info!("User REJECTED"); });
                 Response::builder().status(StatusCode::FORBIDDEN).body(Body::from(format!("403 Forbidden - Empty LDAP result for user '{}'", username)))

@@ -1,3 +1,9 @@
+ldap_authz_proxy (0.2-1) unstable; urgency=low
+
+  * New feature: return LDAP attributes in response headers
+
+ -- Jarno Elonen <elonen@iki.fi>  Sat, 28 Jan 2023 23:08:00 +0000
+
 ldap_authz_proxy (0.1-1) unstable; urgency=low
 
   * First release

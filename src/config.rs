@@ -16,6 +16,7 @@ pub(crate) struct ConfigSection {
     pub(crate) ldap_bind_password: String,
     pub(crate) ldap_search_base: String,
     pub(crate) ldap_query: String,
+    pub(crate) ldap_return_attribs: Vec<String>,
 
     pub(crate) ldap_cache_size: usize,
     pub(crate) ldap_cache_time: u32,
@@ -48,7 +49,7 @@ pub(crate) fn parse_config(config_file: &str) -> Result<Vec<ConfigSection>, Erro
     for section_name in config.sections() {
         let mut sect_map = map.get(section_name.as_str()).unwrap().clone();
 
-        const VALID_KEYS: [&str; 10] = ["ldap_server_url", "ldap_conn_timeout", "ldap_bind_dn", "ldap_bind_password", "ldap_search_base", "ldap_query", "ldap_cache_time", "ldap_cache_size", "username_http_header", "http_path"];
+        const VALID_KEYS: [&str; 11] = ["ldap_server_url", "ldap_conn_timeout", "ldap_bind_dn", "ldap_bind_password", "ldap_search_base", "ldap_query", "ldap_return_attribs", "ldap_cache_time", "ldap_cache_size", "username_http_header", "http_path"];
         for (key, _) in sect_map.iter() {
             if !VALID_KEYS.contains(&key.as_str()) {
                 bail!("Invalid key '{}' in section '{}'. Valid ones are: {}", key, section_name, VALID_KEYS.join(", "));
@@ -82,6 +83,7 @@ pub(crate) fn parse_config(config_file: &str) -> Result<Vec<ConfigSection>, Erro
             ldap_bind_password: sect_map.get("ldap_bind_password").ok_or(err_fn("ldap_bind_password"))?.as_ref().unwrap().clone(),
             ldap_search_base: sect_map.get("ldap_search_base").ok_or(err_fn("ldap_search_base"))?.as_ref().unwrap().clone(),
             ldap_query: sect_map.get("ldap_query").ok_or(err_fn("ldap_query"))?.as_ref().unwrap().clone(),
+            ldap_return_attribs: sect_map.get("ldap_return_attribs").ok_or(err_fn("ldap_return_attribs"))?.as_ref().unwrap().clone().split(",").map(|s| s.trim().to_string()).collect(),
 
             ldap_cache_size: sect_map.get("ldap_cache_size").ok_or(err_fn("ldap_cache_size"))?.as_ref().unwrap().clone().parse()?,
             ldap_cache_time: sect_map.get("ldap_cache_time").ok_or(err_fn("ldap_cache_time"))?.as_ref().unwrap().clone().parse()?,

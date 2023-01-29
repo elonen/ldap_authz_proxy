@@ -35,8 +35,8 @@ services:
         samba-tool domain passwordsettings set --max-pwd-age=0
         # CN=service,CN=Users,DC=example,DC=test
         samba-tool user create service password123 --use-username-as-cn
-        samba-tool user create alice password123 --use-username-as-cn
-        samba-tool user create bob password123 --use-username-as-cn
+        samba-tool user create alice password123 --use-username-as-cn --given-name=Alice --surname=Alison --mail-address="alice@pp.example.test"
+        samba-tool user create bob password123 --use-username-as-cn --given-name=Bob --surname=Bobrikov --mail-address="bob@pp.example.test"
         # CN=ACL_Users,CN=Users,DC=example,DC=test
         samba-tool group add ACL_Users
         samba-tool group add ACL_Admins
