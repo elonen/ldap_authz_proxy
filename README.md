@@ -54,7 +54,26 @@ Resulting binary is `target/release/ldap_authz_proxy`.
 ## Running
 
 The server can be run with `ldap_authz_proxy <configfile>`. Additional
-options are available, see `--help` for details.
+options are available (`--help`):
+
+```
+Usage:
+ldap_authz_proxy [options] <config_file>
+ldap_authz_proxy -h | --help
+
+Required:
+  <config_file>  Path to the configuration file (e.g. /etc/ldap_authz_proxy.conf)
+
+Options:
+    -b --bind=<bind>    Bind address [default: 127.0.0.1]
+    -p --port=<port>    Port to listen on [default: 10567]
+
+    -l FILE --log FILE     Log to file instead of stdout
+    -j --json              Log in JSON format
+    -d --debug             Enable debug logging
+
+    -h --help      Show this screen.
+```
 
 The executable will stay in foreground, so it's recommended to run it
 with a process manager such as `systemd` or `supervisord`. Example
