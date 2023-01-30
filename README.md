@@ -53,10 +53,11 @@ The `ldap_return_attribs`, if not empty, specifies a comma-separated list of LDA
 attributes to return to Nginx in HTTP headers. The header names are prefixed with
 `X-Ldap-Authz-Res-`, so for example `displayName` attribute is returned in
 `X-Ldap-Authz-Res-displayName` header. Use `ldap_return_attribs = *` to return all
-attributes (mainly useful for debugging).
+attributes (mainly useful for debugging). Attributes with multiple values are
+concatenated with `;` separator.
 
-If LDAP query returns multiple results, the first one is used. To see all results,
-use `--debug` option to write them to log.
+If LDAP query returns multiple objects, the first one is used. To see the rest,
+use `--debug` option to log them.
 
 ## Cache
 
@@ -69,6 +70,9 @@ A cache entry takes probably about 1kB of RAM, unless you requested all LDAP att
 
 Technically, each config section gets its own cache, so you can have different cache sizes and
 retention times for different sections.
+
+HTTP response headers contain `X-Ldap-Cached` header that is set to `1` if the response
+was served from cache, and `0` if it was a fresh query.
 
 ## Building
 
@@ -214,7 +218,7 @@ sed -i 's@ldap_server_url *=.*@ldap_server_url = ldap://127.0.0.1:3890@' example
 cargo run -- example.ini --debug &
 
 # Test request directly against ldap_authz_proxy
-curl http://127.0.0.1:10567/admins -H "X-Ldap-Authz-Username:alice"
+curl http://127.0.0.1:10567/admins -H "X-Ldap-Authz-Username:alice" -I
 
 # Cleanup
 kill %1  # Or do: fg + ctrl-c

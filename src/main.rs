@@ -41,7 +41,7 @@ Options:
 "#;
 
 type Sha256Hash = sha2::digest::generic_array::GenericArray<u8, sha2::digest::generic_array::typenum::U32>;
-type LdapSearchRes = Option<HashMap<String, String>>; // HashMap<attr_name, attr_value> or None if not found
+type LdapSearchRes = Option<Vec<(String, String)>>; // HashMap<attr_name, attr_value> or None if not found
 type LdapCache = LruCache<Sha256Hash, LdapSearchRes>;
 
 struct ReqContext {
@@ -59,7 +59,7 @@ struct LdapAnswer {
 /// Caches the result for the next time.
 ///
 /// TODO: Pool connections. Currently a new LDAP connection is created for every request unless cache is hit.
-async fn ldap_check(conf: &ConfigSection, username: &str, cache: &Arc<Mutex<LdapCache>>) -> ldap3::result::Result<LdapAnswer> {
+async fn ldap_query(conf: &ConfigSection, username: &str, cache: &Arc<Mutex<LdapCache>>) -> ldap3::result::Result<LdapAnswer> {
     let query = conf.ldap_query.replace("%USERNAME%", &ldap3::ldap_escape(username));
     tracing::debug!("LDAP string: {}", query);
 
@@ -102,7 +102,7 @@ async fn ldap_check(conf: &ConfigSection, username: &str, cache: &Arc<Mutex<Ldap
 
     // Store first row in a HashMap and log all other rows
     let row_i = 0;
-    let mut attribs = HashMap::new();
+    let mut attribs = Vec::new();
     for row in rs {
         let se = SearchEntry::construct(row);
         if row_i > 0 {
@@ -110,8 +110,8 @@ async fn ldap_check(conf: &ConfigSection, username: &str, cache: &Arc<Mutex<Ldap
         } else {
             tracing::debug!("First result row: {:?}", se);
             for (key, vals) in se.attrs {
-                let vals_comb = vals.iter().map(|v| v.as_str()).collect::<Vec<&str>>().join(", ");
-                attribs.insert(key, vals_comb);
+                let vals_comb = vals.iter().map(|v| v.as_str()).collect::<Vec<&str>>().join(";");
+                attribs.push((key, vals_comb));
             }
         }
     }
@@ -168,17 +168,16 @@ async fn http_handler(req: Request<Body>, ctx: Arc<ReqContext>) -> Result<Respon
 
     // Check LDAP (and cache)
     let cache = ctx.cache.get(conf.section.as_str()).unwrap();
-    match ldap_check(&conf, username, cache).await {
+    match ldap_query(&conf, username, cache).await {
         Err(e) => {
             span.in_scope(|| { tracing::error!("LDAP error: {:?}", e); });
             return Response::builder().status(StatusCode::BAD_GATEWAY).body(Body::from("LDAP error"))
         },
         Ok(la) => {
             let span = span.record("cached", &la.cached);
-            return if let Some(ldap_res) = la.ldap_res {
+            if let Some(ldap_res) = la.ldap_res {
                 span.in_scope(|| { tracing::info!("User authorized Ok"); });
                 let mut resp = Response::new(Body::from("200 OK - LDAP result found"));
-
                 // Store LDAP result attributes to response HTTP headers
                 for (key, val) in ldap_res.iter() {
                     let hname = match HeaderName::from_str(format!("X-LDAP-RES-{}", key).as_str()) {
@@ -198,10 +197,12 @@ async fn http_handler(req: Request<Body>, ctx: Arc<ReqContext>) -> Result<Respon
                     span.in_scope(|| { tracing::debug!("Adding result HTTP header: {:?} = {:?}", hname, hval); });
                     resp.headers_mut().insert(hname, hval);
                 }
+                resp.headers_mut().insert("X-LDAP-CACHED", HeaderValue::from_str(if la.cached { "1" } else { "0" }).unwrap());
                 Ok(resp)
             } else {
-                span.in_scope(|| { tracing::info!("User REJECTED"); });
-                Response::builder().status(StatusCode::FORBIDDEN).body(Body::from(format!("403 Forbidden - Empty LDAP result for user '{}'", username)))
+                Response::builder().status(StatusCode::FORBIDDEN)
+                .header("X-LDAP-CACHED", HeaderValue::from_str(if la.cached { "1" } else { "0" }).unwrap())
+                .body(Body::from(format!("403 Forbidden - Empty LDAP result for user '{:?}'", username)))
             }
         }
     }

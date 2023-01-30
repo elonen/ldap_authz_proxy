@@ -8,10 +8,7 @@ echo "--------------------------------------------------------------------------
 cd test
 DOCKER_BUILDKIT=1 docker compose build
 docker compose up -d
-
-# Make sure we stop the containers when we exit, regardless of how
-trap 'echo "---"; docker compose down' EXIT
-
+trap 'echo "---"; docker compose down' EXIT  #  Make sure we stop the containers when we exit, regardless of how
 
 echo "---------------------------------------------"
 echo "Waiting for services to start up..."
@@ -47,10 +44,13 @@ echo "---------------------------------------------"
 function request() {
     FOLDER="$1"
     CREDS="$2"
-    RES=$(curl -s http://127.0.0.1:8090/$FOLDER/ -u "$CREDS" -I)
+    # Don't remove the "/index.html", otherwise Nginx makes an internal redirect, and warms up LDAP cache prematurely
+    RES=$(curl -s http://127.0.0.1:8090/$FOLDER/index.html -u "$CREDS" -I)
+    # cat <<< """$RES""" >&2
     HTTP_CODE=$(grep HTTP <<< """$RES""" | awk '{print $2}' | tr -d '\r\n')
-    DISPLAY_NAME=$(grep 'X-Display-Name' <<< """$RES""" | sed 's/^.*: //' | tr -d '\r\n') || true
-    echo "${HTTP_CODE}${DISPLAY_NAME}"
+    DISPLAY_NAME=$(grep -i 'X-Display-Name' <<< """$RES""" | sed 's/^.*: //' | tr -d '\r\n') || true
+    LDAP_CACHED=$(grep -i 'X-LDAP-Cached' <<< """$RES""" | sed 's/^.*: //' | tr -d '\r\n') || true
+    echo "${HTTP_CODE}${DISPLAY_NAME} c${LDAP_CACHED}"
 }
 
 function test() {
@@ -59,24 +59,29 @@ function test() {
     EXPECTED="$3"
     ACTUAL="$(request $FOLDER $CREDS)"
     if [ "$ACTUAL" != "$EXPECTED" ]; then
-        echo "Test FAILED - expected $EXPECTED, got $ACTUAL for '$FOLDER' with '$CREDS'"
+        echo "Test FAILED - expected '$EXPECTED', got '$ACTUAL' for '$FOLDER' with '$CREDS'"
     else
         echo "Test OK for '$FOLDER' with '$CREDS' ($ACTUAL == $EXPECTED)"
     fi
 }
 
 function do_tests() {
-    test "user-page" "alice:alice" "200Alice Alison"
-    test "admin-page" "alice:alice" "200"
-    test "user-page" "alice:BADPASSWORD" "401"
-    test "admin-page" "alice:BADPASSWORD" "401"
+    test "user-page" "alice:alice" "200Alice Alison c0"
+    test "admin-page" "alice:alice" "200 c0"
+    test "user-page" "alice:BADPASSWORD" "401 c"
+    test "admin-page" "alice:BADPASSWORD" "401 c"
 
-    test "user-page" "bob:bob" "200Bob Bobrikov"
-    test "admin-page" "bob:bob" "403"
-    test "user-page" "bob:BADPASSWORD" "401"
-    test "admin-page" "bob:BADPASSWORD" "401"
+    test "user-page" "bob:bob" "200Bob Bobrikov c0"
+    test "admin-page" "bob:bob" "403 c"
+    test "user-page" "bob:BADPASSWORD" "401 c"
+    test "admin-page" "bob:BADPASSWORD" "401 c"
 
-    test "bad-page" "alice:alice" "404"
+    test "bad-page" "alice:alice" "404 c"
+    
+    echo "(Repeat and check that query came from cache)"
+    test "user-page" "alice:alice" "200Alice Alison c1"
+    test "admin-page" "alice:alice" "200 c1"
+    test "user-page" "bob:bob" "200Bob Bobrikov c1"
 }
 
 # Run the tests and summarize
