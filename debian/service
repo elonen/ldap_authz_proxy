@@ -5,7 +5,7 @@ StartLimitIntervalSec=0
 
 [Service]
 Type=simple
-Restart=always
+Restart=no
 RestartSec=2
 User=www-data
 ExecStart=/usr/bin/ldap_authz_proxy /etc/ldap_authz_proxy.conf --log /var/log/ldap_authz_proxy.log
