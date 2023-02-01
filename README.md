@@ -201,7 +201,8 @@ The VM running Nginx (and ldap_authz_proxy) was joined to AD domain like this:
         setfacl -m u:www-data:r-- /etc/krb5.keytab
 ```
 
-Some instructions for compiling _spnego-http-auth-nginx-module_ on Debian: https://docs.j7k6.org/sso-nginx-kerberos-spnego-debian/
+Script(s) for building Nginx Kerberos (SPNEGO) module for Debian:
+https://github.com/elonen/debian-nginx-spnego
 
 ## Development
 
