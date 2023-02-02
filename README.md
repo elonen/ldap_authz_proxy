@@ -131,6 +131,9 @@ HTTP headers and performs LDAP queries with them.
 The server can be packaged for Debian variants with `cargo install cargo-deb && cargo deb`.
 This is the recommended way to install it when applicable.
 
+Once installed, edit `/etc/ldap_authz_proxy.conf` to your liking, and then
+enable the service by `systemctl enable ldap_authz_proxy.service`.
+
 ## Testing
 
 Use `./run-tests.sh` to execute test suite. It requires `docker compose`
@@ -161,6 +164,7 @@ server {
 
         server_name www.example.com;
 
+
         satisfy all;    # Require 2 auths: auth_gss (Kerberos) for authn and auth_request (LDAP proxy) for authz
 
         auth_gss on;
@@ -180,6 +184,7 @@ server {
             proxy_set_header        X-Ldap-Authz-Username $remote_user;
         }
 
+
         location /api {
                 proxy_pass http://127.0.0.1:8095/api;
 
@@ -196,8 +201,9 @@ server {
 The VM running Nginx (and ldap_authz_proxy) was joined to AD domain like this:
 
 ```
+	apt install krb5-user libpam-krb5 libsasl2-modules-gssapi-mit acl
         kinit <account name>
-        msktutil -u -s host -s HTTP --dont-expire-password -b OU=Servers --computer-name WWW -h www.example.com
+        msktutil -u -s host -s HTTP --dont-expire-password --computer-name WWW -h www.example.com
         setfacl -m u:www-data:r-- /etc/krb5.keytab
 ```
 
