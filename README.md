@@ -128,11 +128,13 @@ HTTP headers and performs LDAP queries with them.
 
 ## Packaging
 
-The server can be packaged for Debian variants with `cargo install cargo-deb && cargo deb`.
-This is the recommended way to install it when applicable.
+The server can be packaged for Debian variants with `./build-deb-in-docker.sh`
+(or to build locally, `cargo install cargo-deb && cargo deb`).
 
-Once installed, edit `/etc/ldap_authz_proxy.conf` to your liking, and then
-enable the service by `systemctl enable ldap_authz_proxy.service`.
+To install, issue `dpkg -i ldap-authz-proxy_*.deb`, edit `/etc/ldap_authz_proxy.conf` to
+your liking, and then enable the service by `systemctl enable ldap_authz_proxy.service`.
+
+This is the recommended way to install this on Debian systems.
 
 ## Testing
 
