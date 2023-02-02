@@ -59,6 +59,23 @@ concatenated with `;` separator.
 If LDAP query returns multiple objects, the first one is used. To see the rest,
 use `--debug` option to log them.
 
+Corresponding **Nginx** configuration block would look roughly like this -- assuming user has already been authenticated and thus `$remote_user` variable is set:
+
+```nginx
+        auth_request     /authz_admins;
+        auth_request_set $display_name  $upstream_http_x_ldap_res_displayname;
+
+        location = /authz_admins {
+            internal;
+            proxy_pass              http://127.0.0.1:10567/admins;
+            proxy_pass_request_body off;
+            proxy_set_header        Content-Length "";
+            proxy_set_header        X-Ldap-Authz-Username $remote_user;
+        }
+```
+
+(See a more complete example below.)
+
 ## Cache
 
 The server uses a simple in-memory cache to avoid performing the same LDAP queries
