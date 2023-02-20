@@ -220,9 +220,9 @@ server {
 The VM running Nginx (and ldap_authz_proxy) was joined to AD domain like this:
 
 ```
-	apt install krb5-user libpam-krb5 libsasl2-modules-gssapi-mit acl
+	apt install krb5-user libpam-krb5 libsasl2-modules-gssapi-mit acl msktutil
         kinit <account name>
-        msktutil -u -s host -s HTTP --dont-expire-password --computer-name WWW -h www.example.com
+        msktutil --no-reverse-lookups -u -s host -s HTTP --dont-expire-password --computer-name WWW -h www.example.com
         setfacl -m u:www-data:r-- /etc/krb5.keytab
 ```
 
