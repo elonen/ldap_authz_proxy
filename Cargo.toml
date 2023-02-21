@@ -41,6 +41,7 @@ path = "src/main.rs"
 
 [dependencies]
 anyhow = "1.0.68"
+async-recursion = "1.0.2"
 configparser = "3.0.2"
 docopt = "1.1.1"
 hyper = { version = "0.14.23", features = ["full"] }

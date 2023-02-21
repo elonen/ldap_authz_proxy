@@ -45,6 +45,12 @@ services:
         samba-tool group addmembers ACL_Admins Role_Admins
         samba-tool group addmembers ACL_Users alice
         samba-tool group addmembers ACL_Users bob
+        # CN=Role_Beta_Testers,CN=Users,DC=example,DC=test
+        samba-tool group add Role_Beta_Testers
+        samba-tool group addmembers Role_Beta_Testers alice
+        # CN=Role_Bug_Reporters,CN=Users,DC=example,DC=test
+        samba-tool group add Role_Bug_Reporters
+        samba-tool group addmembers Role_Bug_Reporters bob
         echo "-- testing ldapsearch --"
         ldapsearch -xLLL -H ldap://localhost -D "cn=service,CN=Users,dc=example,dc=test" -w password123 -b "dc=example,dc=test" "(cn=alice)"
         echo "-- DC READY FOR TESTING --"

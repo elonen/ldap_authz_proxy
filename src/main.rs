@@ -1,7 +1,7 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::net::SocketAddr;
 use std::str::FromStr;
-use std::sync::Arc;
+use std::sync::{Arc};
 use config::ConfigSection;
 use hyper::header::HeaderName;
 use hyper::http::HeaderValue;
@@ -10,67 +10,103 @@ use hyper::{Request, Response, Body, StatusCode};
 use tokio::net::TcpListener;
 use docopt::Docopt;
 
-use ldap3::{LdapConnAsync, Scope, SearchEntry};
+use async_recursion::async_recursion;
+
+use ldap3::{LdapConnAsync, SearchEntry};
 use sha2::{Sha256, Digest};
 use lru_time_cache::LruCache;
-use tokio::sync::Mutex;
+use tokio::sync::{Mutex, RwLock};
 
 mod config;
 
 const USAGE: &'static str = r#"
 ldap_authz_proxy -- HTTP proxy server for LDAP authorization, mainly for Nginx
 This program is a HTTP proxy server that checks the authorization of an
-already authenticated user against an LDAP server.
+already authenticated user against an LDAP server. It can be used to return
+attributes from LDAP (or user custom) to the Nginx in HTTP headers.
 
 Usage:
-ldap_authz_proxy [options] <config_file>
-ldap_authz_proxy -h | --help
+  ldap_authz_proxy [options] <config_file>
+  ldap_authz_proxy -h | --help
+  ldap_authz_proxy -H | --help-config
+  ldap_authz_proxy -v | --version
 
 Required:
   <config_file>  Path to the configuration file (e.g. /etc/ldap_authz_proxy.conf)
 
 Options:
-    -b --bind=<bind>    Bind address [default: 127.0.0.1]
-    -p --port=<port>    Port to listen on [default: 10567]
+    -b --bind=<bind>     Bind address [default: 127.0.0.1]
+    -p --port=<port>     Port to listen on [default: 10567]
 
-    -l FILE --log FILE     Log to file instead of stdout
-    -j --json              Log in JSON format
-    -d --debug             Enable debug logging
+    -l FILE --log FILE   Log to file instead of stdout
+    -j --json            Log in JSON format
+    -d --debug           Enable debug logging
 
-    -h --help      Show this screen.
+    --dump-config        Dump parse configuration in debug format and exit
+
+    -h --help            Show this screen.
+    -H --help-config     Show help for the configuration file.
+    -v --version         Show version.
 "#;
 
 type Sha256Hash = sha2::digest::generic_array::GenericArray<u8, sha2::digest::generic_array::typenum::U32>;
-type LdapSearchRes = Option<Vec<(String, String)>>; // HashMap<attr_name, attr_value> or None if not found
+type LdapSearchRes = Option<HashMap<String, Vec<String>>>;
 type LdapCache = LruCache<Sha256Hash, LdapSearchRes>;
 
 struct ReqContext {
-    config: Vec<ConfigSection>,
-    cache: HashMap<String, Arc<Mutex<LdapCache>>>,  // <section_name, cache>
+    config: Arc<Vec<ConfigSection>>,
+    cache: HashMap<String, Arc<Mutex<LdapCache>>>,  // section_name -> cache. Mutex instead of RwLock because get() can modify the cache
 }
 
 struct LdapAnswer {
     ldap_res: LdapSearchRes,
     cached: bool,
+    seen_sections: HashSet<String>,
 }
 
-/// Perform LDAP query for given config section and username.
-/// Returns true if the query returns at least one result.
-/// Caches the result for the next time.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+enum SubQueryJoin {
+    Any,
+    All,
+    Main
+}
+
+/// Perform LDAP query/queries for given config section and username.
 ///
 /// TODO: Pool connections. Currently a new LDAP connection is created for every request unless cache is hit.
-async fn ldap_query(conf: &ConfigSection, username: &str, cache: &Arc<Mutex<LdapCache>>) -> ldap3::result::Result<LdapAnswer> {
-    let query = conf.ldap_query.replace("%USERNAME%", &ldap3::ldap_escape(username));
+#[async_recursion]
+async fn ldap_query(
+        section: String,
+        username: String,
+        confs: Arc<Vec<ConfigSection>>,
+        cache: Arc<Mutex<LdapCache>>,
+        seen_sections: Arc<RwLock<HashSet<String>>>,
+    ) -> ldap3::result::Result<LdapAnswer>
+{
+    let conf = confs.iter()
+        .find(|conf| conf.section == section)
+        .expect("BUG: ldap_query() called with unknown section name");
+
+    let mut query = conf.ldap_query.replace("%USERNAME%", &ldap3::ldap_escape(&username));
+    for (key, val) in conf.query_vars.iter() {
+        query = query.replace(&format!("%{key}%"), &ldap3::ldap_escape(val));
+    }
+
     tracing::debug!("LDAP string: {}", query);
+
+    seen_sections.write().await.insert(conf.section.clone());
 
     // Check cache
     let cache_key = {
         let mut hasher = Sha256::new();
-        hasher.update(format!("{}:{}", conf.ldap_server_url, query));
+        hasher.update(format!("{}:{}", conf.section, query));
         let cache_key = hasher.finalize();
         if let Some(res) = cache.lock().await.get(&cache_key) {
             tracing::debug!("Cache hit. Skipping LDAP.");
-            return Ok(LdapAnswer { ldap_res: res.clone(), cached: true });
+            return Ok(LdapAnswer {
+                ldap_res: res.clone(),
+                cached: true,
+                seen_sections: seen_sections.read().await.clone() });
         } else {
             tracing::debug!("Not cached. Performing real query.");
         }
@@ -87,9 +123,9 @@ async fn ldap_query(conf: &ConfigSection, username: &str, cache: &Arc<Mutex<Ldap
 
     let (rs, _res) = match ldap.search(
             conf.ldap_search_base.as_str(),
-            Scope::Subtree,
+            conf.ldap_scope,
             query.as_str(),
-            &conf.ldap_return_attribs
+            &conf.ldap_attribs
         ).await?.success()
     {
         Ok(res) => res,
@@ -100,26 +136,66 @@ async fn ldap_query(conf: &ConfigSection, username: &str, cache: &Arc<Mutex<Ldap
     };
     ldap.unbind().await?;
 
+    let mut res_attribs = HashMap::new();
+
     // Store first row in a HashMap and log all other rows
     let row_i = 0;
-    let mut attribs = Vec::new();
     for row in rs {
         let se = SearchEntry::construct(row);
         if row_i > 0 {
             tracing::debug!("Skipped additional result row #{}: {:?}", row_i, se);
         } else {
             tracing::debug!("First result row: {:?}", se);
+            // Store attribs from LDAP
             for (key, vals) in se.attrs {
-                let vals_comb = vals.iter().map(|v| v.as_str()).collect::<Vec<&str>>().join(";");
-                attribs.push((key, vals_comb));
+                res_attribs.entry(key).or_insert_with(Vec::new).extend(vals);
+            }
+            // Store (manual) attribs from config
+            for (key, vals) in &conf.set_attribs_on_success {
+                res_attribs.entry(key.clone()).or_insert_with(Vec::new).extend(vals.clone());
             }
         }
     }
 
+    // Recurse into sub-sections if necessary
+    let mut authorized = !res_attribs.is_empty();
+    if authorized || conf.sub_query_join == SubQueryJoin::Any
+    {
+        // Spawn sub-queries for all sub-sections that haven't been queried yet
+        let futs = {
+            let seen = seen_sections.read().await;
+            conf.sub_queries.iter()
+                .filter(|s| !seen.contains(*s))
+                .map(|s| {
+                    tracing::debug!("Recursing into section [{}] (with join rule {:?})", s, conf.sub_query_join);
+                    tokio::spawn(ldap_query(s.clone(), username.clone(), confs.clone(), cache.clone(), seen_sections.clone()))
+                }).collect::<Vec<_>>()
+        };
+        
+        // Wait for all sub-queries to finish and join results
+        for fut in futs {
+            let sub_res = fut.await
+                .map_err(|e| ldap3::LdapError::AdapterInit(format!("JoinError: {}", e.to_string())))??;
+            if let Some(sub_attribs) = sub_res.ldap_res {
+                let sub_authz = !sub_attribs.is_empty();
+                authorized = match conf.sub_query_join {
+                    SubQueryJoin::Any => authorized || sub_authz,
+                    SubQueryJoin::All => authorized && sub_authz,
+                    SubQueryJoin::Main => authorized,
+                };
+                res_attribs.extend(sub_attribs);
+            }
+            seen_sections.write().await.extend(sub_res.seen_sections);
+        }
+    }
+
     // Update cache and return
-    let ldap_res = if attribs.is_empty() { None } else { Some(attribs) };
+    let ldap_res = if !authorized || res_attribs.is_empty() { None } else { Some(res_attribs) };
     cache.lock().await.insert(cache_key, ldap_res.clone());
-    Ok(LdapAnswer { ldap_res, cached: false })
+    Ok(LdapAnswer { 
+        ldap_res,
+        cached: false,
+        seen_sections: seen_sections.read().await.clone() })
 }
 
 
@@ -135,13 +211,16 @@ async fn http_handler(req: Request<Body>, ctx: Arc<ReqContext>) -> Result<Respon
         cached = tracing::field::Empty);
 
     // Find config section matching the request URI
-    let conf = ctx.config.iter().find(|conf| conf.http_path_re.is_match(req.uri().path()));
+    let conf = ctx.config.iter().find(|conf| match conf.http_path {
+            Some(ref re) => re.is_match(req.uri().path()),
+            None => false,
+        });
     let conf = match conf {
         Some(conf) => conf,
         None => {
             let msg = format!("404 Not Found - No matching config section for: {}", req.uri().path());
             span.in_scope(|| { tracing::error!(msg); });
-            return Response::builder().status(StatusCode::NOT_FOUND).body(Body::from(msg))
+            return Ok(Response::builder().status(StatusCode::NOT_FOUND).body(Body::from(msg))?)
         }
     };
     let span = span.record("config", conf.section.as_str());
@@ -167,8 +246,9 @@ async fn http_handler(req: Request<Body>, ctx: Arc<ReqContext>) -> Result<Respon
     let span = span.record("username", username);
 
     // Check LDAP (and cache)
-    let cache = ctx.cache.get(conf.section.as_str()).unwrap();
-    match ldap_query(&conf, username, cache).await {
+    let cache = ctx.cache.get(conf.section.as_str()).unwrap().clone();
+    match ldap_query(
+            conf.section.clone(), username.into(), ctx.config.clone(), cache, Arc::new(RwLock::new(HashSet::new()))).await {
         Err(e) => {
             span.in_scope(|| { tracing::error!("LDAP error: {:?}", e); });
             return Response::builder().status(StatusCode::BAD_GATEWAY).body(Body::from("LDAP error"))
@@ -178,8 +258,13 @@ async fn http_handler(req: Request<Body>, ctx: Arc<ReqContext>) -> Result<Respon
             if let Some(ldap_res) = la.ldap_res {
                 span.in_scope(|| { tracing::info!("User authorized Ok"); });
                 let mut resp = Response::new(Body::from("200 OK - LDAP result found"));
+
                 // Store LDAP result attributes to response HTTP headers
-                for (key, val) in ldap_res.iter() {
+                for (key, mut val) in ldap_res {
+                    val.sort();
+                    if conf.deduplicate_attribs { val.dedup() };
+
+                    let val = val.join(&conf.attrib_delimiter);
                     let hname = match HeaderName::from_str(format!("X-LDAP-RES-{}", key).as_str()) {
                         Ok(hname) => hname,
                         Err(_) => {
@@ -257,17 +342,39 @@ pub async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>>
     let json_log = args.get_bool("--json");
     let debug = args.get_bool("--debug");
 
+    if args.get_bool("--help-config") {
+        println!("{}", config::get_config_help());
+        return Ok(());
+    }
+    if args.get_bool("--version") {
+        println!("{} {}", env!("CARGO_PKG_NAME"), env!("CARGO_PKG_VERSION"));
+        return Ok(());
+    }
+
     let _logging_guard = setup_logging(&log_file, debug, json_log)?;
 
     let config_file = args.get_str("<config_file>");
-    let conf = config::parse_config(config_file)?;
+    let conf = Arc::new(match config::parse_config(config_file) {
+        Ok(config) => config,
+        Err(e) => {
+            tracing::error!("Error parsing config file: {}", e);
+            std::process::exit(2);
+        }
+    });
+
+    if args.get_bool("--dump-config") {
+        for c in conf.as_ref() {
+            println!("{}", config::dump_config(c));
+        }
+        return Ok(());
+    }
 
     // Create a cache for each section
     let mut caches = HashMap::new();
-    for sect in &conf {
+    for sect in conf.as_ref() {
         tracing::debug!("CONFIG DUMP: {:?}", sect);
-        let ttl = ::std::time::Duration::from_secs(sect.ldap_cache_time as u64);
-        let cache = LdapCache::with_expiry_duration_and_capacity(ttl, sect.ldap_cache_size);
+        let ttl = ::std::time::Duration::from_secs_f32(sect.cache_time);
+        let cache = LdapCache::with_expiry_duration_and_capacity(ttl, sect.cache_size);
         caches.insert(sect.section.clone(), Arc::new(Mutex::new(cache)));
     }
     let request_context = Arc::new(ReqContext { 

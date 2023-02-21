@@ -8,7 +8,8 @@ if a user is authorized to access some resource, _after_ said user
 has been authenticated by some other means (Kerberos, Basic auth, Token, ...).
 
 Optionally, it can also return user attributes (such as name, email, etc) to Nginx
-in HTTP headers.
+in HTTP headers. If one query is not enough, it can also perform sub-queries to
+allow extra conditions for authorization and/or to fetch more attributes (e.g. group memberships).
 
 Technically it's a small HTTP server that reads usernames from request headers
 and performs configured LDAP queries with them, returning status 200 if query
@@ -22,41 +23,78 @@ The server is configured with an INI file, such as:
 
 ```ini
 [default]
+; Which HTTP header to read the %USERNAME% from
+username_http_header = X-Ldap-Authz-Username
+
+; Example LDAP server configuration. This is for Active Directory,
+; and makes a recursive membership query to given group.
 ldap_server_url = ldap://dc1.example.test:389
 ldap_conn_timeout = 10.0
 ldap_bind_dn = CN=service,CN=Users,DC=example,DC=test
 ldap_bind_password = password123
 ldap_search_base = DC=example,DC=test
+ldap_query = (&(objectCategory=Person)(sAMAccountName=%USERNAME%)(memberOf:1.2.840.113556.1.4.1941:=CN=%MY_CUSTOM_VAR%,CN=Users,DC=example,DC=test))
+ldap_attribs = displayName, givenName, sn, mail
 
-ldap_return_attribs = displayName, givenName, sn, mail
-ldap_cache_time = 30
-ldap_cache_size = 512
-username_http_header = X-Ldap-Authz-Username
+; Cache size (these are defaults)
+cache_time = 30
+cache_size = 512
+
+; These specify how to handle multiple LDAP queries/results
+deduplicate_attribs = true
+sub_query_join = Main
+
 
 [users]
+; Regular expression to match against the request URI
 http_path = /users$
-ldap_query = (&(objectCategory=Person)(sAMAccountName=%USERNAME%)(memberOf:1.2.840.113556.1.4.1941:=CN=ACL_Users,CN=Users,DC=example,DC=test))
+; Ldap query references variable MY_CUSTOM_VAR above. Set it for this query:
+query_vars = MY_CUSTOM_VAR=ACL_Users
+; Fetch additional attributes from LDAP my performing additional queries
+; if this one succeeds. See below for their definitions.
+sub_queries = is_beta_tester, is_bug_reporter
+
 
 [admins]
 http_path = /admins$
-ldap_query = (&(objectCategory=Person)(sAMAccountName=%USERNAME%)(memberOf:1.2.840.113556.1.4.1941:=CN=ACL_Admins,CN=Users,DC=example,DC=test))
+query_vars = MY_CUSTOM_VAR=ACL_Admins
+; Fictional example: instruct backend app to show debug info for admins
+set_attribs_on_success = extraGroups=show_debug_info
+
+; Internal sub-queries (not matched agains URI as http_path is not defined)
+; These examples set additional attributes ("extraGroups") if the user is a
+; member of specified groups.
+
+[is_beta_tester]
+query_vars = MY_CUSTOM_VAR=ACL_Beta_Testers
+set_attribs_on_success = extraGroups=beta_tester
+
+[is_bug_reporter]
+query_vars = MY_CUSTOM_VAR=ACL_Bug_Reporters
+set_attribs_on_success = extraGroups=bug_reporter, extraGroups=show_debug_info
 ```
 
 The `[default]` section contains defaults that can be overridden in other sections.
-Other sections can have arbitrary names, and they each specify a URL path matching
-rule and settings to apply if it matches. The `http_path` value is a regular expression
+Other sections specify a URL path matching rules and settings to apply if it matches.
+The `http_path` value is a regular expression
 that is tested against HTTP requests. If it matches, `ldap_query` from that section
-is executed after replacing `%USERNAME%` with the username from `username_http_header` HTTP header.
-If the LDAP query succeeds, server returns status 200, otherwise 403.
+is executed after replacing `%USERNAME%` with the username from HTTP header named
+in `username_http_header`. If the LDAP query succeeds and returns non-empty results,
+server returns status 200 (with attributes in response headers), otherwise 403.
 
-The `ldap_return_attribs`, if not empty, specifies a comma-separated list of LDAP
+If a section has empty `http_path`, it is considered an internal sub-query and
+can only be referenced from other sections with `sub_queries` setting. Sub-queries
+can be used as to allow or deny access based on additional conditions (rules
+specified by `sub_query_join`), or to fetch additional attributes from LDAP.
+
+The `ldap_attribs`, if not empty, specifies a comma-separated list of LDAP
 attributes to return to Nginx in HTTP headers. The header names are prefixed with
 `X-Ldap-Authz-Res-`, so for example `displayName` attribute is returned in
-`X-Ldap-Authz-Res-displayName` header. Use `ldap_return_attribs = *` to return all
+`X-Ldap-Authz-Res-displayName` header. Use `ldap_attribs = *` to return all
 attributes (mainly useful for debugging). Attributes with multiple values are
-concatenated with `;` separator.
+concatenated with separator specified in `attrib_delimiter`
 
-If LDAP query returns multiple objects, the first one is used. To see the rest,
+If an LDAP query returns multiple objects, the first one is used. To see the rest,
 use `--debug` option to log them.
 
 Corresponding **Nginx** configuration block would look roughly like this -- assuming user has already been authenticated and thus `$remote_user` variable is set:
@@ -79,22 +117,25 @@ Corresponding **Nginx** configuration block would look roughly like this -- assu
 ## Cache
 
 The server uses a simple in-memory cache to avoid performing the same LDAP queries
-over and over again. Cache size is limited to `ldap_cache_size` entries, and
-entries are removed in LRU order. Cache time is `ldap_cache_time` seconds.
+over and over again. Cache size is limited to `cache_size` entries, and
+entries are removed in LRU order. Cache time is `cache_time` seconds.
 One cache entry is created for each unique username, so ldap_cache_size should
 be large enough to accommodate all users that might be accessing the server simultaneously.
 A cache entry takes probably about 1kB of RAM, unless you requested all LDAP attributes.
 
 Technically, each config section gets its own cache, so you can have different cache sizes and
-retention times for different sections.
+retention times for different sections. If a section uses sub-queries, the cache is shared
+between the main query and all sub-queries, with main query's cache size and time.
 
 HTTP response headers contain `X-Ldap-Cached` header that is set to `1` if the response
 was served from cache, and `0` if it was a fresh query.
 
 ## Building
 
-The server is written in Rust and can be built with `cargo build --release`.
+The server is written in Rust and can be manually built with `cargo build --release`.
 Resulting binary is `target/release/ldap_authz_proxy`.
+
+If you want Debian packages, see below.
 
 ## Running
 
@@ -103,24 +144,30 @@ options are available (`--help`):
 
 ```
 Usage:
-ldap_authz_proxy [options] <config_file>
-ldap_authz_proxy -h | --help
+  ldap_authz_proxy [options] <config_file>
+  ldap_authz_proxy -h | --help
+  ldap_authz_proxy -H | --help-config
+  ldap_authz_proxy -v | --version
 
 Required:
   <config_file>  Path to the configuration file (e.g. /etc/ldap_authz_proxy.conf)
 
 Options:
-    -b --bind=<bind>    Bind address [default: 127.0.0.1]
-    -p --port=<port>    Port to listen on [default: 10567]
+    -b --bind=<bind>     Bind address [default: 127.0.0.1]
+    -p --port=<port>     Port to listen on [default: 10567]
 
-    -l FILE --log FILE     Log to file instead of stdout
-    -j --json              Log in JSON format
-    -d --debug             Enable debug logging
+    -l FILE --log FILE   Log to file instead of stdout
+    -j --json            Log in JSON format
+    -d --debug           Enable debug logging
 
-    -h --help      Show this screen.
+    --dump-config        Dump parse configuration in debug format and exit
+
+    -h --help            Show this screen.
+    -H --help-config     Show help for the configuration file.
+    -v --version         Show version.
 ```
 
-The executable will stay in foreground, so it's recommended to run it
+The executable stays in foreground, so it's recommended to run it
 with a process manager such as `systemd` or `supervisord`. Example
 `systemd` service file is included in `debian/service`.
 
@@ -194,13 +241,14 @@ server {
 
         auth_request     /authz_all;
         auth_request_set $display_name  $upstream_http_x_ldap_res_displayname;
+        auth_request_set $extra_groups  $upstream_http_x_ldap_res_extragroups;  # See example .INI
 
         location = /authz_all {
             internal;
             proxy_pass              http://127.0.0.1:10567/users;
             proxy_pass_request_body off;
             proxy_set_header        Content-Length "";
-            proxy_set_header        X-Ldap-Authz-Username $remote_user;
+            proxy_set_header        X-Ldap-Authz-Username $remote_user;  # $remote_user is set by auth_gss
         }
 
 
@@ -210,6 +258,7 @@ server {
                 # Pass authenticated username to backend
                 proxy_set_header X-Remote-User-Id $remote_user;
                 proxy_set_header X-Remote-User-Name $display_name;
+                proxy_set_header X-Remote-User-ExtraGroups $extra_groups;
 
                 proxy_set_header X-Real-IP $remote_addr;
                 proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
@@ -256,8 +305,8 @@ git checkout -- example.ini  # Reverse the config
 
 ## Contributing
 
-This server was created to scratch a persistent sysop itch.
-Contributions are welcome.
+This software was created to scratch a persistent sysops itch.
+Contributions are very welcome.
 
 ## License
 
