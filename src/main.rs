@@ -16,6 +16,7 @@ use ldap3::{LdapConnAsync, SearchEntry};
 use sha2::{Sha256, Digest};
 use lru_time_cache::LruCache;
 use tokio::sync::{Mutex, RwLock};
+use secrecy::ExposeSecret;
 
 mod config;
 
@@ -118,7 +119,7 @@ async fn ldap_query(
     ldap3::drive!(conn);
 
     let bind_dn = conf.ldap_bind_dn.as_str();
-    let bind_pw = conf.ldap_bind_password.as_str();
+    let bind_pw = conf.ldap_bind_password.expose_secret().as_str();
     ldap.simple_bind(bind_dn, bind_pw).await?.success()?;
 
     let (rs, _res) = match ldap.search(
@@ -247,8 +248,14 @@ async fn http_handler(req: Request<Body>, ctx: Arc<ReqContext>) -> Result<Respon
 
     // Check LDAP (and cache)
     let cache = ctx.cache.get(conf.section.as_str()).unwrap().clone();
-    match ldap_query(
-            conf.section.clone(), username.into(), ctx.config.clone(), cache, Arc::new(RwLock::new(HashSet::new()))).await {
+    let ldap_res = span.in_scope(|| async { ldap_query(
+        conf.section.clone(), 
+        username.into(), 
+        ctx.config.clone(),
+        cache, 
+        Arc::new(RwLock::new(HashSet::new()))).await }).await;
+
+    match ldap_res {
         Err(e) => {
             span.in_scope(|| { tracing::error!("LDAP error: {:?}", e); });
             return Response::builder().status(StatusCode::BAD_GATEWAY).body(Body::from("LDAP error"))

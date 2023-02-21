@@ -7,6 +7,7 @@ use ini::Ini;
 use anyhow::Error;
 use anyhow::Result;
 use regex::Regex;
+use secrecy::SecretString;
 
 use crate::SubQueryJoin;
 
@@ -92,7 +93,7 @@ config_options! {
     ldap_server_url: String = None; "URL of the LDAP server (e.g. 'ldaps://ldap.example.com:636')",
     ldap_conn_timeout: f32 = Some("10.0"); "LDAP connection timeout in seconds",
     ldap_bind_dn: String = None; "DN of the LDAP user to bind as (e.g. 'CN=proxyuser,OU=users,DC=example,DC=com')",
-    ldap_bind_password: String = None; "Password of the LDAP user to bind as",
+    ldap_bind_password: SecretString = None; "Password of the LDAP user to bind as",
     ldap_search_base: String = None; "LDAP base DN to search in (e.g. 'OU=users,DC=example,DC=com')",
     ldap_scope: ldap3::Scope = Some("subtree"); "LDAP search scope. Must be 'subtree', 'onelevel' or 'base')",
     ldap_query: String = None; "LDAP query to use. May contain '%USERNAME%', which will be quoted and replaced.\nExample: '(&(objectClass=person)(sAMAccountName=%USERNAME%))",
@@ -250,7 +251,7 @@ pub(crate) fn parse_config(config_file: &str) -> Result<Vec<ConfigSection>, Erro
             ldap_server_url: get("ldap_server_url"),
             ldap_conn_timeout: get("ldap_conn_timeout").parse().or_else(|_| Err(parse_err("ldap_conn_timeout")))?,
             ldap_bind_dn: get("ldap_bind_dn"),
-            ldap_bind_password: get("ldap_bind_password"),
+            ldap_bind_password: get("ldap_bind_password").into(),
             ldap_search_base: get("ldap_search_base"),
             ldap_scope: match get("ldap_scope").as_str() {
                 "subtree" => ldap3::Scope::Subtree,
