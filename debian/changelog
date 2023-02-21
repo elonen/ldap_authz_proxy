@@ -1,3 +1,18 @@
+ldap_authz_proxy (0.3.0-1) unstable; urgency=low
+
+  * Rename some config options for clarity, add a few new ones
+  * Security: redact bind passwords from logs
+  * New features:
+    - Support for LDAP sub-queries
+    - Support for custom variables in LDAP queries (for shorter config)
+    - Support for adding static attributes per section
+    - Built-in help for config options
+    - Config file dump option for debugging
+    - Support quoting in config file
+    - Configurable attribute delimiter in response headers
+
+ -- Jarno Elonen <elonen@iki.fi>  Tue, 22 Feb 2023 23:14:00 +0000
+
 ldap_authz_proxy (0.2.1-1) unstable; urgency=low
 
   * Slightly optimize RAM use
