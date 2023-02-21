@@ -23,18 +23,18 @@ The server is configured with an INI file, such as:
 
 ```ini
 [default]
-; Which HTTP header to read the %USERNAME% from
-username_http_header = X-Ldap-Authz-Username
+; Which HTTP header to read %USERNAME% from
+username_http_header = "X-Ldap-Authz-Username"
 
 ; Example LDAP server configuration. This is for Active Directory,
 ; and makes a recursive membership query to given group.
-ldap_server_url = ldap://dc1.example.test:389
+ldap_server_url = "ldap://dc1.example.test:389"
 ldap_conn_timeout = 10.0
-ldap_bind_dn = CN=service,CN=Users,DC=example,DC=test
-ldap_bind_password = password123
-ldap_search_base = DC=example,DC=test
-ldap_query = (&(objectCategory=Person)(sAMAccountName=%USERNAME%)(memberOf:1.2.840.113556.1.4.1941:=CN=%MY_CUSTOM_VAR%,CN=Users,DC=example,DC=test))
-ldap_attribs = displayName, givenName, sn, mail
+ldap_bind_dn = "CN=service,CN=Users,DC=example,DC=test"
+ldap_bind_password = "password123"
+ldap_search_base = "DC=example,DC=test"
+ldap_query = "(&(objectCategory=Person)(sAMAccountName=%USERNAME%)(memberOf:1.2.840.113556.1.4.1941:=CN=%MY_CUSTOM_VAR%,CN=Users,DC=example,DC=test))"
+ldap_attribs = "displayName, givenName, sn, mail"
 
 ; Cache size (these are defaults)
 cache_time = 30
@@ -47,31 +47,34 @@ sub_query_join = Main
 
 [users]
 ; Regular expression to match against the request URI
-http_path = /users$
+http_path = "/users$"
 ; Ldap query references variable MY_CUSTOM_VAR above. Set it for this query:
-query_vars = MY_CUSTOM_VAR=ACL_Users
+query_vars = "MY_CUSTOM_VAR = ACL_Users"
 ; Fetch additional attributes from LDAP my performing additional queries
 ; if this one succeeds. See below for their definitions.
-sub_queries = is_beta_tester, is_bug_reporter
+sub_queries = "is_beta_tester, is_bug_reporter"
 
 
 [admins]
-http_path = /admins$
-query_vars = MY_CUSTOM_VAR=ACL_Admins
+http_path = "/admins$"
+query_vars = "MY_CUSTOM_VAR = ACL_Admins"
 ; Fictional example: instruct backend app to show debug info for admins
-set_attribs_on_success = extraGroups=show_debug_info
+set_attribs_on_success = "extraGroups = show_debug_info"
+
 
 ; Internal sub-queries (not matched agains URI as http_path is not defined)
 ; These examples set additional attributes ("extraGroups") if the user is a
 ; member of specified groups.
 
 [is_beta_tester]
-query_vars = MY_CUSTOM_VAR=ACL_Beta_Testers
-set_attribs_on_success = extraGroups=beta_tester
+query_vars = "MY_CUSTOM_VAR = Role_Beta_Testers"
+set_attribs_on_success = "extraGroups = beta_tester"
 
 [is_bug_reporter]
-query_vars = MY_CUSTOM_VAR=ACL_Bug_Reporters
-set_attribs_on_success = extraGroups=bug_reporter, extraGroups=show_debug_info
+query_vars = "MY_CUSTOM_VAR = Role_Bug_Reporters"
+set_attribs_on_success = "extraGroups = bug_reporter, extraGroups = show_debug_info"
+; Circular references are pruned, so this nonsense won't crash - it's just useless:
+sub_queries = "is_bug_reporter, users"
 ```
 
 The `[default]` section contains defaults that can be overridden in other sections.
@@ -181,7 +184,7 @@ world-readable. The server itself doesn't need to be able to write
 to the configuration file.
 
 Usernames are quoted before being used in LDAP queries, so they (hopefully)
-can't be used to inject arbitrary LDAP queries. In any case, it's recommended
+can't be used to inject arbitrary LDAP queries. It's recommended
 to use a read-only LDAP bind user just in case.
 
 LDAPS is supported (even though the test scripts use plain ldap://), and is

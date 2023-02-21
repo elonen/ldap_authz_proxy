@@ -42,12 +42,12 @@ path = "src/main.rs"
 [dependencies]
 anyhow = "1.0.68"
 async-recursion = "1.0.2"
-configparser = "3.0.2"
 docopt = "1.1.1"
 hyper = { version = "0.14.23", features = ["full"] }
 ldap3 = "0.11.1"
 lru_time_cache = "0.11.11"
 regex = "1.7.1"
+rust-ini = "0.18.0"
 sha2 = "0.10.6"
 tokio = { version = "1.24.2", features = ["full"] }
 tracing = "0.1.37"

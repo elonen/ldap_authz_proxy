@@ -3,7 +3,7 @@ use std::collections::HashSet;
 
 use anyhow::bail;
 use anyhow::anyhow;
-use configparser::ini::Ini;
+use ini::Ini;
 use anyhow::Error;
 use anyhow::Result;
 use regex::Regex;
@@ -140,21 +140,19 @@ config_options! {
 
 /// Parse the configuration file
 /// 
-/// Returns a vector of ConfigSections, excluding the DEFAULT section, which
+/// Returns a vector of ConfigSections, excluding the [default] section, which
 /// is used to fill in missing values in the other sections.
 pub(crate) fn parse_config(config_file: &str) -> Result<Vec<ConfigSection>, Error>
 {
-    let mut config = Ini::new();
-    config.load(config_file).map_err(|e| anyhow!("Error loading config file: {}", e))?;
-    let map = config.get_map_ref();
+    let mut ini = Ini::load_from_file(config_file)?;
 
-    // Get the DEFAULT section
-    let mut defaults = match map.get("default") {
-            Some(d) => d,
-            None => bail!("No 'default' section in config file"),
-        }.clone();
-
-    // Fill in missing values from built-in defaults
+    // Collect defaults
+    let mut defaults = HashMap::new();
+    // ...from the [default] section
+    if let Some(default_sect) = ini.section(Some("default")) {
+        defaults.extend(default_sect.iter().map(|(k, v)| (k.to_string(), Some(v.to_string()))));
+    }
+    // ..from built-in defaults
     for (key, _, def) in CONFIG_OPTIONS.iter() {
         if !defaults.contains_key(*key) {
             if let Some(def) = def {
@@ -167,8 +165,12 @@ pub(crate) fn parse_config(config_file: &str) -> Result<Vec<ConfigSection>, Erro
     let mut res = Vec::new();
 
     // Walk through the sections
-    for section_name in config.sections() {
-        let mut sect_map = map.get(section_name.as_str()).unwrap().clone();
+    for (section_name, sect_props) in ini.iter_mut() {
+        let section_name = match section_name {
+            Some(name) => name,
+            None => { bail!("Options outside of a section are not allowed"); }
+        };
+
         if seen_sections.contains(&section_name) {
             bail!("Duplicate section [{}]", section_name);
         } else {
@@ -176,9 +178,9 @@ pub(crate) fn parse_config(config_file: &str) -> Result<Vec<ConfigSection>, Erro
         }
 
         // Check that no unknown keys are set
-        let unknown_keys = sect_map.keys()
+        let unknown_keys = sect_props.iter()
+            .map(|(key, _)| key)
             .filter(|key| !CONFIG_OPTIONS.iter().any(|(k, _, _)| k == key))
-            .map(|key| key.clone())
             .collect::<Vec<_>>();
         if !unknown_keys.is_empty() {
             bail!("Unknown key(s) in section [{}]: {}", &section_name, unknown_keys.join(", "));
@@ -190,14 +192,16 @@ pub(crate) fn parse_config(config_file: &str) -> Result<Vec<ConfigSection>, Erro
 
         // Apply defaults
         for (key, value) in &defaults {
-            if sect_map.get(key).is_none() {
-                sect_map.insert(key.clone(), value.clone());
+            if sect_props.get(key).is_none() {
+                if let Some(value) = value {
+                    sect_props.insert(key.clone(), value.clone());
+                }
             }
         }
 
         // Check that all required keys are set
         let missing_keys = CONFIG_OPTIONS.iter()
-            .filter(|(key, _, _)| !sect_map.contains_key(*key))
+            .filter(|(key, _, _)| !sect_props.contains_key(*key))
             .map(|(key, _, _)| *key)
             .filter(|key| key != &"section")
             .collect::<Vec<_>>();
@@ -205,10 +209,9 @@ pub(crate) fn parse_config(config_file: &str) -> Result<Vec<ConfigSection>, Erro
             bail!("Config option(s) not set in section [{}]: {}", section_name, missing_keys.join(", "));
         }
 
-        let get = |key: &str| sect_map.get(key)
+        let get = |key: &str| sect_props.get(key)
             .unwrap_or_else(|| panic!("BUG: missing key '{key}' after checking that it's not missing?!"))
-            .clone()
-            .expect("BUG? None value for an config value?");
+            .to_string();
 
         // Compile regex
         let http_path = get("http_path");
@@ -240,7 +243,7 @@ pub(crate) fn parse_config(config_file: &str) -> Result<Vec<ConfigSection>, Erro
 
         // Store result
         res.push(ConfigSection {
-            section: section_name.clone(),
+            section: section_name.to_string(),
             http_path: http_path_re,
             username_http_header: get("username_http_header"),
 
