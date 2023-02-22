@@ -12,8 +12,9 @@ RUN set -eux; \
         ldap-utils apache2-utils
 
 COPY test/nginx-site.conf /etc/nginx/sites-available/default
-RUN htpasswd -cb /var/www/html/.htpasswd alice alice
-RUN htpasswd -b /var/www/html/.htpasswd bob bob
+RUN htpasswd -cb /var/www/html/.htpasswd alice alice123
+RUN htpasswd -b /var/www/html/.htpasswd bob bob123
+RUN htpasswd -b /var/www/html/.htpasswd charlie charlie123
 RUN cp -a /var/www/html/index.nginx-debian.html /var/www/html/index.html
 
 WORKDIR /run

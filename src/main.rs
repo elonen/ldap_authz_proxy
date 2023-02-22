@@ -1,6 +1,7 @@
 use std::collections::{HashMap, HashSet};
 use std::net::SocketAddr;
 use std::str::FromStr;
+use std::sync::atomic::AtomicU64;
 use std::sync::{Arc};
 use config::ConfigSection;
 use hyper::header::HeaderName;
@@ -12,7 +13,7 @@ use docopt::Docopt;
 
 use async_recursion::async_recursion;
 
-use ldap3::{LdapConnAsync, SearchEntry};
+use ldap3::{LdapConnAsync, SearchEntry, ResultEntry};
 use sha2::{Sha256, Digest};
 use lru_time_cache::LruCache;
 use tokio::sync::{Mutex, RwLock};
@@ -57,6 +58,7 @@ type LdapCache = LruCache<Sha256Hash, LdapSearchRes>;
 struct ReqContext {
     config: Arc<Vec<ConfigSection>>,
     cache: HashMap<String, Arc<Mutex<LdapCache>>>,  // section_name -> cache. Mutex instead of RwLock because get() can modify the cache
+    req_id: Arc<AtomicU64>
 }
 
 struct LdapAnswer {
@@ -77,6 +79,7 @@ enum SubQueryJoin {
 /// TODO: Pool connections. Currently a new LDAP connection is created for every request unless cache is hit.
 #[async_recursion]
 async fn ldap_query(
+        req_id: u64,
         section: String,
         username: String,
         confs: Arc<Vec<ConfigSection>>,
@@ -84,16 +87,21 @@ async fn ldap_query(
         seen_sections: Arc<RwLock<HashSet<String>>>,
     ) -> ldap3::result::Result<LdapAnswer>
 {
+    let span = tracing::info_span!("ldap",
+        req_id = req_id,
+        user = &username,
+        section = &section);
+
     let conf = confs.iter()
         .find(|conf| conf.section == section)
         .expect("BUG: ldap_query() called with unknown section name");
 
     let mut query = conf.ldap_query.replace("%USERNAME%", &ldap3::ldap_escape(&username));
     for (key, val) in conf.query_vars.iter() {
-        query = query.replace(&format!("%{key}%"), &ldap3::ldap_escape(val));
+        query = query.replace(&format!("%{key}%"), val);
     }
 
-    tracing::debug!("LDAP string: {}", query);
+    span.in_scope(|| { tracing::debug!("LDAP query: {}", query); });
 
     seen_sections.write().await.insert(conf.section.clone());
 
@@ -102,51 +110,87 @@ async fn ldap_query(
         let mut hasher = Sha256::new();
         hasher.update(format!("{}:{}", conf.section, query));
         let cache_key = hasher.finalize();
+
         if let Some(res) = cache.lock().await.get(&cache_key) {
-            tracing::debug!("Cache hit. Skipping LDAP.");
+            span.in_scope(|| { tracing::debug!("Cache hit. Skipping LDAP. Result: {:?}", res); });
             return Ok(LdapAnswer {
                 ldap_res: res.clone(),
                 cached: true,
                 seen_sections: seen_sections.read().await.clone() });
         } else {
-            tracing::debug!("Not cached. Performing real query.");
+            span.in_scope(|| { tracing::debug!("Not cached. Performing real query."); });
         }
         cache_key
     };
 
-    let settings = ldap3::LdapConnSettings::new().set_conn_timeout(std::time::Duration::from_millis((conf.ldap_conn_timeout*1000.0) as u64));
-    let (conn, mut ldap) = LdapConnAsync::with_settings(settings, conf.ldap_server_url.as_str()).await?;
-    ldap3::drive!(conn);
+    async fn do_query(conf: &ConfigSection, query: &str) ->
+        ldap3::result::Result<Vec<ResultEntry>>
+    {
+        let settings = ldap3::LdapConnSettings::new().set_conn_timeout(std::time::Duration::from_millis((conf.ldap_conn_timeout*1000.0) as u64));
+        let (conn, mut ldap) = LdapConnAsync::with_settings(settings, conf.ldap_server_url.as_str()).await?;
+        ldap3::drive!(conn);
 
-    let bind_dn = conf.ldap_bind_dn.as_str();
-    let bind_pw = conf.ldap_bind_password.expose_secret().as_str();
-    ldap.simple_bind(bind_dn, bind_pw).await?.success()?;
+        let bind_dn = conf.ldap_bind_dn.as_str();
+        let bind_pw = conf.ldap_bind_password.expose_secret().as_str();
 
-    let (rs, _res) = match ldap.search(
+        ldap.simple_bind(bind_dn, bind_pw).await?.success()?;
+
+        match ldap.search(
             conf.ldap_search_base.as_str(),
             conf.ldap_scope,
-            query.as_str(),
-            &conf.ldap_attribs
-        ).await?.success()
-    {
-        Ok(res) => res,
+            query,
+            &conf.ldap_attribs).await?.success()
+        {
+            Ok((rows, _)) => {
+                ldap.unbind().await?;
+                Ok(rows)
+            },
+            Err(e) => Err(e)
+        }
+    }
+
+    // Try execute the query, with 1 second delay between each attempt
+    const MAX_RETRY: i32 = 3;
+    let res = async {
+        for i in 0..MAX_RETRY {
+            match do_query(conf, query.as_str()).await {
+                Ok(rs) => {
+                    return Ok(rs);
+                },
+                Err(e) => {
+                    use ldap3::LdapError::*;
+                    if i == MAX_RETRY-1 || !matches!(e, ResultRecv{..} | Io{..} | EndOfStream{..} | Timeout{..}) {
+                        // Last attempt or non-temporary error
+                        return Err(e);
+                    } else {
+                        let wait_time = 1.0 + (i as f32) * 0.5;
+                        span.in_scope(|| { tracing::info!("Temporary LDAP error: {:?}. Retrying in {wait_time} second.", e); });
+                        tokio::time::sleep(std::time::Duration::from_secs_f32(wait_time)).await;
+                    }
+                }
+            };
+        };
+        panic!("BUG: ldap_query() retry loop should never have reached this point");
+    }.await;
+
+    let result_entries = match res {
+        Ok(rs) => rs,
         Err(e) => {
-            tracing::error!("LDAP error: {}", e);
-            return Err(e)
+            span.in_scope(|| { tracing::error!("LDAP error: {}", e); });
+            return Err(e);
         }
     };
-    ldap.unbind().await?;
 
     let mut res_attribs = HashMap::new();
 
     // Store first row in a HashMap and log all other rows
     let row_i = 0;
-    for row in rs {
+    for row in result_entries {
         let se = SearchEntry::construct(row);
         if row_i > 0 {
-            tracing::debug!("Skipped additional result row #{}: {:?}", row_i, se);
+            span.in_scope(|| { tracing::debug!("Skipped additional result row #{}: {:?}", row_i, se); });
         } else {
-            tracing::debug!("First result row: {:?}", se);
+            span.in_scope(|| { tracing::debug!("First result row: {:?}", se); });
             // Store attribs from LDAP
             for (key, vals) in se.attrs {
                 res_attribs.entry(key).or_insert_with(Vec::new).extend(vals);
@@ -168,8 +212,8 @@ async fn ldap_query(
             conf.sub_queries.iter()
                 .filter(|s| !seen.contains(*s))
                 .map(|s| {
-                    tracing::debug!("Recursing into section [{}] (with join rule {:?})", s, conf.sub_query_join);
-                    tokio::spawn(ldap_query(s.clone(), username.clone(), confs.clone(), cache.clone(), seen_sections.clone()))
+                    span.in_scope(|| { tracing::debug!("Recursing into [{}] (rule {:?})", s, conf.sub_query_join); });
+                    tokio::spawn(ldap_query(req_id, s.clone(), username.clone(), confs.clone(), cache.clone(), seen_sections.clone()))
                 }).collect::<Vec<_>>()
         };
         
@@ -179,19 +223,34 @@ async fn ldap_query(
                 .map_err(|e| ldap3::LdapError::AdapterInit(format!("JoinError: {}", e.to_string())))??;
             if let Some(sub_attribs) = sub_res.ldap_res {
                 let sub_authz = !sub_attribs.is_empty();
+                let old_authz = authorized;
                 authorized = match conf.sub_query_join {
                     SubQueryJoin::Any => authorized || sub_authz,
                     SubQueryJoin::All => authorized && sub_authz,
                     SubQueryJoin::Main => authorized,
                 };
-                res_attribs.extend(sub_attribs);
+                span.in_scope(|| {
+                    if old_authz != authorized {
+                        tracing::info!("Authz changed from '{}' to '{}' by sub-query result '{}' with rule: {:?})", old_authz, authorized, sub_authz, conf.sub_query_join);
+                    }
+                });
+                for (key, vals) in sub_attribs {
+                    res_attribs.entry(key).or_insert_with(Vec::new).extend(vals);
+                }
             }
             seen_sections.write().await.extend(sub_res.seen_sections);
         }
     }
 
+    // Sort and deduplicate values
+    res_attribs.values_mut().for_each(|v| {
+        v.sort();
+        if conf.deduplicate_attribs { v.dedup() };
+    });
+
     // Update cache and return
     let ldap_res = if !authorized || res_attribs.is_empty() { None } else { Some(res_attribs) };
+    span.in_scope(|| { tracing::debug!("Query result: {:?}", ldap_res); });
     cache.lock().await.insert(cache_key, ldap_res.clone());
     Ok(LdapAnswer { 
         ldap_res,
@@ -204,11 +263,13 @@ async fn ldap_query(
 /// Matches path against regexp in every config section and uses the first match.
 async fn http_handler(req: Request<Body>, ctx: Arc<ReqContext>) -> Result<Response<Body>, hyper::http::Error>
 {
-    let span = tracing::info_span!("http_handler",
+    let req_id = ctx.req_id.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+
+    let span = tracing::info_span!("http",
         method = %req.method(),
         path = %req.uri().path(),
-        config = tracing::field::Empty,
-        username = tracing::field::Empty,
+        section = tracing::field::Empty,
+        user = tracing::field::Empty,
         cached = tracing::field::Empty);
 
     // Find config section matching the request URI
@@ -224,7 +285,7 @@ async fn http_handler(req: Request<Body>, ctx: Arc<ReqContext>) -> Result<Respon
             return Ok(Response::builder().status(StatusCode::NOT_FOUND).body(Body::from(msg))?)
         }
     };
-    let span = span.record("config", conf.section.as_str());
+    let span = span.record("section", conf.section.as_str());
 
     // Get username from HTTP header
     let username = match req.headers().get(conf.username_http_header.as_str()) {
@@ -244,11 +305,12 @@ async fn http_handler(req: Request<Body>, ctx: Arc<ReqContext>) -> Result<Respon
             return Response::builder().status(StatusCode::BAD_REQUEST).body(Body::from(msg))
         }
     };
-    let span = span.record("username", username);
+    let span = span.record("user", username);
 
     // Check LDAP (and cache)
     let cache = ctx.cache.get(conf.section.as_str()).unwrap().clone();
     let ldap_res = span.in_scope(|| async { ldap_query(
+        req_id,
         conf.section.clone(), 
         username.into(), 
         ctx.config.clone(),
@@ -267,9 +329,7 @@ async fn http_handler(req: Request<Body>, ctx: Arc<ReqContext>) -> Result<Respon
                 let mut resp = Response::new(Body::from("200 OK - LDAP result found"));
 
                 // Store LDAP result attributes to response HTTP headers
-                for (key, mut val) in ldap_res {
-                    val.sort();
-                    if conf.deduplicate_attribs { val.dedup() };
+                for (key, val) in ldap_res {
 
                     let val = val.join(&conf.attrib_delimiter);
                     let hname = match HeaderName::from_str(format!("X-LDAP-RES-{}", key).as_str()) {
@@ -386,7 +446,8 @@ pub async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>>
     }
     let request_context = Arc::new(ReqContext { 
         config: conf,
-        cache: caches
+        cache: caches,
+        req_id: Arc::new(AtomicU64::new(0)),
     });
 
     // Start listening

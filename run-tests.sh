@@ -5,6 +5,8 @@ echo "--------------------------------------------------------------------------
 echo "Starting Active Directory (Samba), Nginx and LDAP authz proxy in Docker Compose..."
 echo "----------------------------------------------------------------------------------"
 
+grep -q "^ *ldap_server_url *=.*dc1.example.test" example.ini || (echo "ERROR: LDAP URL is not set to 'dc1.example.test' config! Test would fail." && exit 1)
+
 cd test
 DOCKER_BUILDKIT=1 docker compose build
 docker compose up -d
@@ -67,22 +69,26 @@ function test() {
 }
 
 function do_tests() {
-    test "user-page" "alice:alice" "200Alice Alison c0 eg:beta_tester"
-    test "admin-page" "alice:alice" "200 c0 eg:show_debug_info"
-    test "user-page" "alice:BADPASSWORD" "401 c eg:"
+    test "user-page"  "alice:alice123" "200Alice Alison c0 eg:beta_tester"
+    test "admin-page" "alice:alice123" "200 c0 eg:show_debug_info"
+    test "user-page"  "alice:BADPASSWORD" "401 c eg:"
     test "admin-page" "alice:BADPASSWORD" "401 c eg:"
 
-    test "user-page" "bob:bob" "200Bob Bobrikov c0 eg:bug_reporter;show_debug_info"
-    test "admin-page" "bob:bob" "403 c eg:"
-    test "user-page" "bob:BADPASSWORD" "401 c eg:"
+    test "user-page"  "bob:bob123" "200Bob Bobrikov c0 eg:bug_reporter;peer_support;show_debug_info"
+    test "admin-page" "bob:bob123" "403 c eg:"
+    test "user-page"  "bob:BADPASSWORD" "401 c eg:"
     test "admin-page" "bob:BADPASSWORD" "401 c eg:"
 
-    test "bad-page" "alice:alice" "404 c eg:"
+    test "user-page"  "charlie:charlie123" "200Charlie Chandler c0 eg:peer_support"
+    test "admin-page" "charlie:charlie123" "403 c eg:"
+    test "user-page"  "charlie:BADPASSWORD" "401 c eg:"
+
+    test "bad-page"   "alice:alice123" "404 c eg:"
     
     echo "(Repeat and check that query came from cache)"
-    test "user-page" "alice:alice" "200Alice Alison c1 eg:beta_tester"
-    test "admin-page" "alice:alice" "200 c1 eg:show_debug_info"
-    test "user-page" "bob:bob" "200Bob Bobrikov c1 eg:bug_reporter;show_debug_info"
+    test "user-page"  "alice:alice123" "200Alice Alison c1 eg:beta_tester"
+    test "admin-page" "alice:alice123" "200 c1 eg:show_debug_info"
+    test "user-page"  "bob:bob123" "200Bob Bobrikov c1 eg:bug_reporter;peer_support;show_debug_info"
 }
 
 # Run the tests and summarize

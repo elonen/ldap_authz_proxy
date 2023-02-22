@@ -103,6 +103,9 @@ config_options! {
         "Extra variables to use in the query, in addition to %USERNAME%.\n",
         "You can use these to avoid repeating long query strings in different sections.\n",
         "\n",
+        "Unlike %USERNAME%, these are NOT quoted, so you can also use them to add\n",
+        "extra filters to the query (e.g. '(memberOf=group1)').",
+        "\n",
         "Example: 'MY_GROUP_NAME=group1, MY_USER_ATTRIB=sAMAccountName'\n",
         "...would turn '(&(objectClass=person)(%MY_USER_ATTRIB%=%USERNAME%)(memberOf=%MY_GROUP_NAME%))'\n",
         "into '(&(objectClass=person)(sAMAccountName=%USERNAME%)(memberOf=group1))'"
