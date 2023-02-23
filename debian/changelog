@@ -1,3 +1,13 @@
+ldap_authz_proxy (0.3.1-1) unstable; urgency=low
+
+  * Bugfix: attribute joining in sub-query results
+  * New features:
+    - Add --test option to try out a query without starting the server
+    - Allow lists in config file to be split into multiple lines
+    - Retry LDAP queries a few times on some temporary errors
+
+ -- Jarno Elonen <elonen@iki.fi>  Tue, 23 Feb 2023 10:30:00 +0000
+
 ldap_authz_proxy (0.3.0-1) unstable; urgency=low
 
   * Rename some config options for clarity, add a few new ones
@@ -11,7 +21,7 @@ ldap_authz_proxy (0.3.0-1) unstable; urgency=low
     - Support quoting in config file
     - Configurable attribute delimiter in response headers
 
- -- Jarno Elonen <elonen@iki.fi>  Tue, 22 Feb 2023 23:14:00 +0000
+ -- Jarno Elonen <elonen@iki.fi>  Tue, 21 Feb 2023 23:14:00 +0000
 
 ldap_authz_proxy (0.2.1-1) unstable; urgency=low
 

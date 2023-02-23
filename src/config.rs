@@ -22,21 +22,28 @@ macro_rules! config_options {
             )*
         }
 
-        fn is_multiline(opt: &str) -> bool {
+        const CONFIG_OPTIONS: &[&str] = &[ $(stringify!($name),)* ];
+
+        fn option_is_list(opt: &str) -> bool {
             match opt {
-                $(
-                    $( stringify!($name) => { assert!(stringify!($multi) == "MULTILINE"); true } )?
-                )*
+                $( $( stringify!($name) => { assert!(stringify!($multi) == "MULTILINE"); true } )? )*
                 _ => false,
             }
         }
 
+        fn help_for_option(key: &str) -> &str {
+            match key {
+                $( stringify!($name) => $help, )*
+                _ => "<Unknown option>",
+            }
+        }
 
-        const CONFIG_OPTIONS: &[(&str, &str, Option<&str>)] = &[
-            $(
-                (stringify!($name), $help, $default),
-            )*
-        ];
+        fn default_for_option(key: &str) -> Option<&str> {
+            match key {
+                $( stringify!($name) => $default, )*
+                _ => None,
+            }
+        }
 
         const CONFIG_HELP_INTRO: &str = r##"
 Configuration file in in INI format:
@@ -58,10 +65,15 @@ Configuration file in in INI format:
 
 Every section must have a unique name.
 
-Descriptions of possible config options follows. Options marked with '(+)'
-are comma-separated lists - if specified multiple times, their values are
-concatenated.
+Options containing a comma separated list (marked (+)) can be specified
+multiple times. These examples are equivalent:
 
+    ldap_attribs = CN, displayName, givenName, sn, mail
+
+    ldap_attribs = CN, displayName, givenName
+    ldap_attribs = sn, mail
+
+Config options:
 "##;
 
         pub fn get_config_help() -> String {
@@ -72,18 +84,14 @@ concatenated.
                 }
             }
             CONFIG_HELP_INTRO.to_string() + &CONFIG_OPTIONS.iter()
-                .filter(|(key, _, _)| *key != "section")
-                .map(|(key, help, def)| format!("  {}{}  {}\n\n    {}\n\n\n",
+                .filter(|key| **key != "section")
+                .map(|key| format!("  {}{}  {}\n\n    {}\n\n\n",
                     key,
-                    if is_multiline(key) { " (+)" } else { "" },
-                    fmt_def(def),
-                    help.replace("\n", "\n    ")
+                    if option_is_list(key) { " (+)" } else { "" },
+                    fmt_def( &default_for_option( &key )),
+                    help_for_option(key).replace("\n", "\n    ")
                 ))
                 .collect::<String>()
-        }
-
-        fn help_for_key(key: &str) -> &str {
-            CONFIG_OPTIONS.iter().find(|(k, _, _)| k == &key).map(|(_, v, _)| *v).unwrap()
         }
 
         pub (crate) fn dump_config(conf: &ConfigSection) -> String {
@@ -169,12 +177,18 @@ pub(crate) fn parse_config(config_file: &str) -> Result<Vec<ConfigSection>, Erro
     let mut defaults = HashMap::new();
     // ...from the [default] section
     if let Some(default_sect) = ini.section(Some("default")) {
-        defaults.extend(default_sect.iter().map(|(k, v)| (k.to_string(), Some(v.to_string()))));
+        defaults = default_sect.iter().map(|(key, _)|
+            (key.to_string(), Some(
+                // Join values from multiple config lines with a comma
+                default_sect.get_all(key)
+                    .map(|v| v.trim()).filter(|v| !v.is_empty()).collect::<Vec<_>>()
+                    .join(", ").trim().to_string()
+                ))).collect();
     }
     // ..from built-in defaults
-    for (key, _, def) in CONFIG_OPTIONS.iter() {
+    for key in CONFIG_OPTIONS.iter() {
         if !defaults.contains_key(*key) {
-            if let Some(def) = def {
+            if let Some(def) = default_for_option(key) {
                 defaults.insert(key.to_string(), Some(def.to_string()));
             }
         }
@@ -199,7 +213,7 @@ pub(crate) fn parse_config(config_file: &str) -> Result<Vec<ConfigSection>, Erro
         // Check that no unknown keys are set
         let unknown_keys = sect_props.iter()
             .map(|(key, _)| key)
-            .filter(|key| !CONFIG_OPTIONS.iter().any(|(k, _, _)| k == key))
+            .filter(|key| !CONFIG_OPTIONS.iter().any(|k| k == key))
             .collect::<Vec<_>>();
         if !unknown_keys.is_empty() {
             bail!("Unknown key(s) in section [{}]: {}", &section_name, unknown_keys.join(", "));
@@ -207,8 +221,8 @@ pub(crate) fn parse_config(config_file: &str) -> Result<Vec<ConfigSection>, Erro
 
         // Only allow certain keys to appear multiple times
         for (key, _) in sect_props.iter() {
-            if sect_props.get_all(key).count() > 1 && !is_multiline(key) {
-                bail!("Key '{}' (in section [{}]) is not a list, and therefore cannot appear mutiple times.", key, section_name);
+            if sect_props.get_all(key).count() > 1 && !option_is_list(key) {
+                bail!("Key '{}' (in section [{}]) defined mutiple times. This is allowed only for list options.", key, section_name);
             }
         }
         
@@ -227,8 +241,8 @@ pub(crate) fn parse_config(config_file: &str) -> Result<Vec<ConfigSection>, Erro
 
         // Check that all required keys are set
         let missing_keys = CONFIG_OPTIONS.iter()
-            .filter(|(key, _, _)| !sect_props.contains_key(*key))
-            .map(|(key, _, _)| *key)
+            .filter(|key| !sect_props.contains_key(*key))
+            .map(|key| *key)
             .filter(|key| key != &"section")
             .collect::<Vec<_>>();
         if !missing_keys.is_empty() {
@@ -239,10 +253,7 @@ pub(crate) fn parse_config(config_file: &str) -> Result<Vec<ConfigSection>, Erro
         let get = |key: &str| sect_props.get_all(key)
             .map(|v| v.trim())
             .filter(|v| !v.is_empty())
-            .collect::<Vec<_>>()            
-            .join(", ")
-            .trim()
-            .to_string();
+            .collect::<Vec<_>>().join(", ").trim().to_string();
 
         // Compile regex
         let http_path = get("http_path");
@@ -250,7 +261,7 @@ pub(crate) fn parse_config(config_file: &str) -> Result<Vec<ConfigSection>, Erro
             Some(Regex::new(&http_path).map_err(|e| anyhow!("Invalid regex in http_path: {}", e))?) };
 
         let parse_err = |key: &str| -> Error {
-            anyhow!("Invalid value for option '{key}' in section [{section_name}]: {}.\n -- {}", get(key), help_for_key(key))
+            anyhow!("Invalid value for option '{key}' in section [{section_name}]: {}.\n -- {}", get(key), help_for_option(key))
         };
 
         /// Parse a comma-separated list of assignments.

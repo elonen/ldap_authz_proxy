@@ -1,5 +1,6 @@
 use std::collections::{HashMap, HashSet};
 use std::net::SocketAddr;
+use std::process::exit;
 use std::str::FromStr;
 use std::sync::atomic::AtomicU64;
 use std::sync::{Arc};
@@ -29,6 +30,7 @@ attributes from LDAP (or user custom) to the Nginx in HTTP headers.
 
 Usage:
   ldap_authz_proxy [options] <config_file>
+  ldap_authz_proxy -t | --test [options] <config_file> <username> <uri_path>
   ldap_authz_proxy -h | --help
   ldap_authz_proxy -H | --help-config
   ldap_authz_proxy -v | --version
@@ -44,7 +46,12 @@ Options:
     -j --json            Log in JSON format
     -d --debug           Enable debug logging
 
-    --dump-config        Dump parse configuration in debug format and exit
+    --dump-config        Check configuration file, dump parsed
+                         values to stdout if successful, and exit.
+
+    -t --test            Test mode. Query LDAP for given username and URI,
+                         then exit with 0 if the user is authorized (HTTP 200)
+                         or with HTTP status code (e.g. 403) otherwise.
 
     -h --help            Show this screen.
     -H --help-config     Show help for the configuration file.
@@ -272,12 +279,9 @@ async fn http_handler(req: Request<Body>, ctx: Arc<ReqContext>) -> Result<Respon
         user = tracing::field::Empty,
         cached = tracing::field::Empty);
 
-    // Find config section matching the request URI
-    let conf = ctx.config.iter().find(|conf| match conf.http_path {
-            Some(ref re) => re.is_match(req.uri().path()),
-            None => false,
-        });
-    let conf = match conf {
+    let conf = match ctx.config.iter().find(|c|
+        matches!(c.http_path, Some(ref re) if re.is_match(req.uri().path())))
+    {
         Some(conf) => conf,
         None => {
             let msg = format!("404 Not Found - No matching config section for: {}", req.uri().path());
@@ -418,16 +422,17 @@ pub async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>>
         return Ok(());
     }
 
-    let _logging_guard = setup_logging(&log_file, debug, json_log)?;
-
     let config_file = args.get_str("<config_file>");
     let conf = Arc::new(match config::parse_config(config_file) {
         Ok(config) => config,
         Err(e) => {
-            tracing::error!("Error parsing config file: {}", e);
+            eprintln!("CONFIG ERROR: {}", e);   // stderr
             std::process::exit(2);
         }
     });
+
+
+    let _logging_guard = setup_logging(&log_file, debug, json_log)?;
 
     if args.get_bool("--dump-config") {
         for c in conf.as_ref() {
@@ -450,22 +455,66 @@ pub async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>>
         req_id: Arc::new(AtomicU64::new(0)),
     });
 
-    // Start listening
     let port: u16 = args.get_str("--port").parse()?;
-    let bind = args.get_str("--bind");
-    
-    let addr: SocketAddr = format!("{}:{}", bind, port).parse()?;
-    let listener = TcpListener::bind(addr).await?;
-    tracing::info!("Listening on http://{}", addr);
-    loop {
-        let (stream, _) = listener.accept().await?;
+
+    if !args.get_bool("--test")
+    {
+        // Start listening
+        let bind = args.get_str("--bind");
+        let addr: SocketAddr = format!("{}:{}", bind, port).parse()?;
+        let listener = TcpListener::bind(addr).await?;
+        tracing::info!("Listening on http://{}", addr);
+        loop {
+            let (stream, _) = listener.accept().await?;
+            let ctx = request_context.clone();
+            tokio::task::spawn(async move   {
+                if let Err(err) = hyper::server::conn::Http::new()
+                    .serve_connection(stream, service_fn(|req| http_handler(req, Arc::clone(&ctx))))
+                    .await {
+                        tracing::error!("server error: {}", err);
+                }
+            });
+        }
+    }
+    else
+    {
+        tracing::info!("RUNNING IN --test MODE");
+        let username = args.get_str("<username>");
+        let uri_path = args.get_str("<uri_path>");
         let ctx = request_context.clone();
-        tokio::task::spawn(async move   {
-            if let Err(err) = hyper::server::conn::Http::new()
-                .serve_connection(stream, service_fn(|req| http_handler(req, Arc::clone(&ctx))))
-                .await {
-                    tracing::error!("server error: {}", err);
+
+        let conf = ctx.config.iter()
+            .find(|conf| matches!(conf.http_path, Some(ref re) if re.is_match(uri_path)))
+            .unwrap_or_else(|| {
+                tracing::error!("No matching section found for uri_path '{}'", uri_path);
+                println!("Test result: HTTP 404");
+                exit(404);
+            });
+
+        let req = Request::builder()
+            .method("GET")
+            .uri(format!("http://localhost:{}/{}", port, uri_path))
+            .header(conf.username_http_header.clone() , username)
+            .body(Body::empty())?;
+
+        match http_handler(req, ctx).await {
+            Ok(resp) => {
+                println!("Test result: HTTP {}", resp.status());
+                for (k, v) in resp.headers() {
+                    println!("{}: {}", k, v.to_str().unwrap());
+                }
+                let code = resp.status().as_u16() as i32;
+                match code {
+                    0 => panic!("BUG: HTTP 0 is invalid!"),
+                    200 => { exit(0); },
+                    _ => { exit(code); },
+                }
+            },
+            Err(e) => {
+                println!("Error: {}", e);
             }
-        });
+        }
+
+        Ok(())
     }
 }

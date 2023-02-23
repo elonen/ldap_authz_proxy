@@ -150,8 +150,14 @@ The server can be run with `ldap_authz_proxy <configfile>`. Additional
 options are available (`--help`):
 
 ```
+ldap_authz_proxy -- HTTP proxy server for LDAP authorization, mainly for Nginx
+This program is a HTTP proxy server that checks the authorization of an
+already authenticated user against an LDAP server. It can be used to return
+attributes from LDAP (or user custom) to the Nginx in HTTP headers.
+
 Usage:
   ldap_authz_proxy [options] <config_file>
+  ldap_authz_proxy -t | --test [options] <config_file> <username> <uri_path>
   ldap_authz_proxy -h | --help
   ldap_authz_proxy -H | --help-config
   ldap_authz_proxy -v | --version
@@ -167,7 +173,12 @@ Options:
     -j --json            Log in JSON format
     -d --debug           Enable debug logging
 
-    --dump-config        Dump parse configuration in debug format and exit
+    --dump-config        Check configuration file, dump parsed
+                         values to stdout if successful, and exit.
+
+    -t --test            Test mode. Query LDAP for given username and URI,
+                         then exit with 0 if the user is authorized (HTTP 200)
+                         or with HTTP status code (e.g. 403) otherwise.
 
     -h --help            Show this screen.
     -H --help-config     Show help for the configuration file.
@@ -426,6 +437,9 @@ cargo run -- example.ini --debug &
 
 # Test request directly against ldap_authz_proxy
 curl http://127.0.0.1:10567/admins -H "X-Ldap-Authz-Username:alice" -I
+
+#...or use --test option to avoid curl:
+cargo run -- example.ini --debug --test alice "/admins"
 
 # Cleanup
 kill %1  # Or do: fg + ctrl-c

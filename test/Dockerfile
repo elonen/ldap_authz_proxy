@@ -25,4 +25,5 @@ RUN set -eux; \
     cargo build
 
 COPY . .
+RUN set -eux; target/debug/ldap_authz_proxy example.ini --dump-config > /dev/null && echo "Config file OK."
 CMD ["bash"]
