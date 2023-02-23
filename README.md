@@ -3,23 +3,24 @@
 [![Build Status](https://app.travis-ci.com/elonen/ldap_authz_proxy.svg?branch=master)](https://app.travis-ci.com/elonen/ldap_authz_proxy)
 [![Release](https://img.shields.io/github/v/release/elonen/ldap_authz_proxy?include_prereleases)]()
 
-A helper that allows Nginx to lookup from Active Directory / LDAP
-if a user is authorized to access some resource, _after_ said user
-has been authenticated by some other means (Kerberos, Basic auth, Token, ...).
+Authorize Nginx users against LDAP, optionally returning attributes.
 
-Optionally, it can also return user attributes (such as name, email, etc) to Nginx
-in HTTP headers. If one query is not enough, it can also perform sub-queries to
-allow extra conditions for authorization and/or to fetch more attributes (e.g. group memberships).
+Once a user has been authenticated by some other means (e.g. Kerberos, Basic auth, Token, ...),
+this server can be used to authorize them to access some resource.
+
+If one LDAP/Active Directory query is not enough, the program can perform sub-queries to
+allow extra auth conditions, or to fetch more attributes (e.g. group memberships).
+Results are cached for a configurable amount of time.
 
 Technically it's a small HTTP server that reads usernames from request headers
 and performs configured LDAP queries with them, returning status 200 if query
-succeeded or 403 if it failed; an HTTP<>LDAP proxy of sorts.
-Nginx can auth against such a thing with the ´auth_request`
-directive. Results are cached for a configurable amount of time.
+succeeded or 403 if it failed.
+
+Use Nginx ´auth_request` directive to use this server as an authorization proxy.
 
 ## Configuration
 
-The server is configured with an INI file, such as:
+Configuration file format:
 
 ```ini
 [default]
@@ -29,7 +30,6 @@ username_http_header = "X-Ldap-Authz-Username"
 ; Example LDAP server configuration. This is for Active Directory,
 ; and makes a recursive membership query to given group.
 ldap_server_url = "ldap://dc1.example.test:389"
-ldap_conn_timeout = 10.0
 ldap_bind_dn = "CN=service,CN=Users,DC=example,DC=test"
 ldap_bind_password = "password123"
 ldap_search_base = "DC=example,DC=test"
@@ -81,25 +81,22 @@ set_attribs_on_success = "extraGroups = bug_reporter, extraGroups = show_debug_i
 sub_queries = "is_bug_reporter, users"
 ```
 
-The `[default]` section contains defaults that can be overridden in other sections.
-Other sections specify a URL path matching rules and settings to apply if it matches.
-The `http_path` value is a regular expression
-that is tested against HTTP requests. If it matches, `ldap_query` from that section
-is executed after replacing `%USERNAME%` with the username from HTTP header named
-in `username_http_header`. If the LDAP query succeeds and returns non-empty results,
-server returns status 200 (with attributes in response headers), otherwise 403.
+The `[default]` section contains defaults for other sections.
+In other sections, `http_path` is a regular expression
+that is tested against HTTP URI path from Nginx. If it matches, `ldap_query`
+is executed after replacing `%USERNAME%` with the username from HTTP headers.
+If the LDAP query succeeds and returns non-empty results,
+the proxy returns status 200 (with attributes in response headers), otherwise 403.
 
-If a section has empty `http_path`, it is considered an internal sub-query and
-can only be referenced from other sections with `sub_queries` setting. Sub-queries
-can be used as to allow or deny access based on additional conditions (rules
+If a section has empty `http_path`, it is an internal sub-query that never matches
+any URIs, and can only be referenced from other sections with `sub_queries` setting.
+Sub-queries can be used to allow or deny access based on additional conditions (rules
 specified by `sub_query_join`), or to fetch additional attributes from LDAP.
 
-The `ldap_attribs`, if not empty, specifies a comma-separated list of LDAP
-attributes to return to Nginx in HTTP headers. The header names are prefixed with
-`X-Ldap-Authz-Res-`, so for example `displayName` attribute is returned in
-`X-Ldap-Authz-Res-displayName` header. Use `ldap_attribs = *` to return all
-attributes (mainly useful for debugging). Attributes with multiple values are
-concatenated with separator specified in `attrib_delimiter`
+Option `ldap_attribs` specifies a list of LDAP attributes to return to Nginx.
+The result header names are prefixed with `X-Ldap-Authz-Res-`, so for
+example `displayName` attribute is returned in `X-Ldap-Authz-Res-displayName`.
+Attributes with multiple values are concatenated with separator specified in `attrib_delimiter`
 
 If an LDAP query returns multiple objects, the first one is used. To see the rest,
 use `--debug` option to log them.
@@ -124,11 +121,11 @@ Corresponding **Nginx** configuration block would look roughly like this -- assu
 ## Cache
 
 The server uses a simple in-memory cache to avoid performing the same LDAP queries
-over and over again. Cache size is limited to `cache_size` entries, and
-entries are removed in LRU order. Cache time is `cache_time` seconds.
+over and over again. Cache is limited to `cache_size` entries, and
+entries are removed in LRU order. Entries last for `cache_time` seconds.
+
 One cache entry is created for each unique username, so ldap_cache_size should
 be large enough to accommodate all users that might be accessing the server simultaneously.
-A cache entry takes probably about 1kB of RAM, unless you requested all LDAP attributes.
 
 Technically, each config section gets its own cache, so you can have different cache sizes and
 retention times for different sections. If a section uses sub-queries, the cache is shared
@@ -301,6 +298,16 @@ https://github.com/elonen/debian-nginx-spnego
 Configuration options (generated by `ldap_authz_proxy --help-config`):
 
 ```
+Options containing a comma separated list (marked (+)) can be specified
+multiple times. These examples are equivalent:
+
+    ldap_attribs = CN, displayName, givenName, sn, mail
+
+    ldap_attribs = CN, displayName, givenName
+    ldap_attribs = sn, mail
+
+Config options:
+
   http_path  [default: '']
 
     Regular expression to match the HTTP path against (e.g. '^/api/v1/.*').
@@ -349,19 +356,18 @@ Configuration options (generated by `ldap_authz_proxy --help-config`):
     Example: '(&(objectClass=person)(sAMAccountName=%USERNAME%))
 
 
-  ldap_attribs  [default: 'CN']
+  ldap_attribs (+)  [default: 'CN']
 
     LDAP attributes to return (e.g. 'displayName, givenName, sn, mail'). Must not be empty.
 
 
-  query_vars  [default: '']
+  query_vars (+)  [default: '']
 
     Extra variables to use in the query, in addition to %USERNAME%.
     You can use these to avoid repeating long query strings in different sections.
-    Unlike %USERNAME%, these are NOT quoted, so you can use them to add
+
+    Unlike %USERNAME%, these are NOT quoted, so you can also use them to add
     extra filters to the query (e.g. '(memberOf=group1)').
-
-
     Example: 'MY_GROUP_NAME=group1, MY_USER_ATTRIB=sAMAccountName'
     ...would turn '(&(objectClass=person)(%MY_USER_ATTRIB%=%USERNAME%)(memberOf=%MY_GROUP_NAME%))'
     into '(&(objectClass=person)(sAMAccountName=%USERNAME%)(memberOf=group1))'
@@ -388,14 +394,14 @@ Configuration options (generated by `ldap_authz_proxy --help-config`):
     Example: 'someAttr=foo,bar,foo,foo' becomes 'someAttr=foo,bar')
 
 
-  set_attribs_on_success  [default: '']
+  set_attribs_on_success (+)  [default: '']
 
     Attributes to set manually if the main query succeeds.
     If empty, only the attributes returned by LDAP queries are set.
     Format: 'attribute=value1, attribute=value2, attribute2= ...'
 
 
-  sub_queries  [default: '']
+  sub_queries (+)  [default: '']
 
     Section names of optional sub-queries.'.
 
