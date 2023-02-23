@@ -84,6 +84,9 @@ function do_tests() {
     test "user-page"  "charlie:BADPASSWORD" "401 c eg:"
 
     test "bad-page"   "alice:alice123" "404 c eg:"
+
+    # Test username quoting with malicious characters, should give 401, not 500
+    test "user-page"  ")=&%)):password" "401 c eg:"
     
     echo "(Repeat and check that query came from cache)"
     test "user-page"  "alice:alice123" "200Alice Alison c1 eg:beta_tester"

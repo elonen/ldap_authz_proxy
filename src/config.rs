@@ -13,13 +13,24 @@ use crate::SubQueryJoin;
 
 
 macro_rules! config_options {
-    ($($name:ident: $type:ty = $default:expr ; $help:expr),*) => {
+    ($($name:ident $([$multi:tt])? : $type:ty = $default:expr ; $help:expr),*) => {
+
         #[derive(Debug, Clone)]
         pub(crate) struct ConfigSection {
             $(
                 pub(crate) $name: $type,
             )*
         }
+
+        fn is_multiline(opt: &str) -> bool {
+            match opt {
+                $(
+                    $( stringify!($name) => { assert!(stringify!($multi) == "MULTILINE"); true } )?
+                )*
+                _ => false,
+            }
+        }
+
 
         const CONFIG_OPTIONS: &[(&str, &str, Option<&str>)] = &[
             $(
@@ -31,26 +42,25 @@ macro_rules! config_options {
 Configuration file in in INI format:
 
     [default]
-    ; Default values for all sections (can be overridden in the sections)
-    key = value1
-    key = value2
+    ; Default values for all other sections
+    option1 = value1
+    option2 = value2
     ...
 
 
     [section1]
-    ; (same keys as in [default], if values differ)
+    ; (any options that differ from [default])
 
     [section2]
-    ; (same keys as in [default], if values differ)
+    ; (any options that differ from [default])
 
     ...
 
-You can define defaults for other sections in the [default] section.
-It's not used for anything else.
+Every section must have a unique name.
 
-Every section must have a unique name, and the name 'default' is reserved.
-
-Descriptions of the config keys:
+Descriptions of possible config options follows. Options marked with '(+)'
+are comma-separated lists - if specified multiple times, their values are
+concatenated.
 
 "##;
 
@@ -63,7 +73,12 @@ Descriptions of the config keys:
             }
             CONFIG_HELP_INTRO.to_string() + &CONFIG_OPTIONS.iter()
                 .filter(|(key, _, _)| *key != "section")
-                .map(|(key, help, def)| format!("  {}  {}\n\n    {}\n\n\n", key, fmt_def(def), help.replace("\n", "\n    ") ))
+                .map(|(key, help, def)| format!("  {}{}  {}\n\n    {}\n\n\n",
+                    key,
+                    if is_multiline(key) { " (+)" } else { "" },
+                    fmt_def(def),
+                    help.replace("\n", "\n    ")
+                ))
                 .collect::<String>()
         }
 
@@ -97,9 +112,9 @@ config_options! {
     ldap_search_base: String = None; "LDAP base DN to search in (e.g. 'OU=users,DC=example,DC=com')",
     ldap_scope: ldap3::Scope = Some("subtree"); "LDAP search scope. Must be 'subtree', 'onelevel' or 'base')",
     ldap_query: String = None; "LDAP query to use. May contain '%USERNAME%', which will be quoted and replaced.\nExample: '(&(objectClass=person)(sAMAccountName=%USERNAME%))",
-    ldap_attribs: Vec<String> = Some("CN"); "LDAP attributes to return (e.g. 'displayName, givenName, sn, mail'). Must not be empty.",
+    ldap_attribs [MULTILINE]: Vec<String> = Some("CN"); "LDAP attributes to return (e.g. 'displayName, givenName, sn, mail'). Must not be empty.",
 
-    query_vars: HashMap<String, String> = Some(""); concat!(
+    query_vars [MULTILINE]: HashMap<String, String> = Some(""); concat!(
         "Extra variables to use in the query, in addition to %USERNAME%.\n",
         "You can use these to avoid repeating long query strings in different sections.\n",
         "\n",
@@ -117,11 +132,11 @@ config_options! {
     attrib_delimiter: String = Some(";"); "Delimiter to use when concatenating multiple values of an attribute",
     deduplicate_attribs: bool = Some("true"); "Whether to deduplicate attribute values.\nExample: 'someAttr=foo,bar,foo,foo' becomes 'someAttr=foo,bar')",
 
-    set_attribs_on_success: Vec<(String, Vec<String>)> = Some(""); concat!(
+    set_attribs_on_success [MULTILINE] : Vec<(String, Vec<String>)> = Some(""); concat!(
         "Attributes to set manually if the main query succeeds.\n",
         "If empty, only the attributes returned by LDAP queries are set.\n",
         "Format: 'attribute=value1, attribute=value2, attribute2= ...'"),
-    sub_queries: Vec<String> = Some(""); concat!(
+    sub_queries [MULTILINE]: Vec<String> = Some(""); concat!(
         "Section names of optional sub-queries.'.\n",
         "\n",
         "Sub-queries can check for additional conditions and/or set additional attributes.\n",
@@ -190,6 +205,13 @@ pub(crate) fn parse_config(config_file: &str) -> Result<Vec<ConfigSection>, Erro
             bail!("Unknown key(s) in section [{}]: {}", &section_name, unknown_keys.join(", "));
         }
 
+        // Only allow certain keys to appear multiple times
+        for (key, _) in sect_props.iter() {
+            if sect_props.get_all(key).count() > 1 && !is_multiline(key) {
+                bail!("Key '{}' (in section [{}]) is not a list, and therefore cannot appear mutiple times.", key, section_name);
+            }
+        }
+        
         if section_name == "default" {
             continue;
         }
@@ -213,8 +235,13 @@ pub(crate) fn parse_config(config_file: &str) -> Result<Vec<ConfigSection>, Erro
             bail!("Config option(s) not set in section [{}]: {}", section_name, missing_keys.join(", "));
         }
 
-        let get = |key: &str| sect_props.get(key)
-            .unwrap_or_else(|| panic!("BUG: missing key '{key}' after checking that it's not missing?!"))
+        // Helper function to get a value from the section. Combines multiple values with a comma.
+        let get = |key: &str| sect_props.get_all(key)
+            .map(|v| v.trim())
+            .filter(|v| !v.is_empty())
+            .collect::<Vec<_>>()            
+            .join(", ")
+            .trim()
             .to_string();
 
         // Compile regex
@@ -226,6 +253,8 @@ pub(crate) fn parse_config(config_file: &str) -> Result<Vec<ConfigSection>, Erro
             anyhow!("Invalid value for option '{key}' in section [{section_name}]: {}.\n -- {}", get(key), help_for_key(key))
         };
 
+        /// Parse a comma-separated list of assignments.
+        /// E.g. "key1=value1, key2=value2, key3=value3"
         fn split_assignments(s: &str) -> Result<Vec<(String, String)>, Error> {
             let mut res = Vec::new();
             for assignment in s.split(',')

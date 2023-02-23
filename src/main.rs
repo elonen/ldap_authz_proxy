@@ -170,7 +170,7 @@ async fn ldap_query(
                 }
             };
         };
-        panic!("BUG: ldap_query() retry loop should never have reached this point");
+        unreachable!();
     }.await;
 
     let result_entries = match res {
