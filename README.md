@@ -3,9 +3,10 @@
 [![Build Status](https://app.travis-ci.com/elonen/ldap_authz_proxy.svg?branch=master)](https://app.travis-ci.com/elonen/ldap_authz_proxy)
 [![Release](https://img.shields.io/github/v/release/elonen/ldap_authz_proxy?include_prereleases)]()
 
-Authorize Nginx users against LDAP, optionally returning attributes.
+Secure any HTTP resource (static site, a web app, ...) with LDAP / Active Directory.
+That is, trasparently authorize Nginx users against LDAP, optionally returning attributes.
 
-Once a user has been authenticated by some other means (e.g. Kerberos, Basic auth, Token, ...),
+Once a user has been authenticated by some other means (e.g. OIDC, Kerberos, Basic auth, Token, ...),
 this server can be used to authorize them to access some resource.
 
 If one LDAP/Active Directory query is not enough, the program can perform sub-queries to
@@ -116,7 +117,7 @@ Corresponding **Nginx** configuration block would look roughly like this -- assu
         }
 ```
 
-(See a more complete example below.)
+(See more complete examples below.)
 
 ## Cache
 
@@ -139,11 +140,12 @@ was served from cache, and `0` if it was a fresh query.
 The server is written in Rust and can be manually built with `cargo build --release`.
 Resulting binary is `target/release/ldap_authz_proxy`.
 
-If you want Debian packages, see below.
+If you want Debian packages instead (recommended), see below.
 
 ## Running
 
-The server can be run with `ldap_authz_proxy <configfile>`. Additional
+The recommended way to run the server is through a process manager (e.g. systemd),
+but it can also be run manually like this: `ldap_authz_proxy <configfile>`. Additional
 options are available (`--help`):
 
 ```
@@ -182,8 +184,8 @@ Options:
     -v --version         Show version.
 ```
 
-The executable stays in foreground, so it's recommended to run it
-with a process manager such as `systemd` or `supervisord`. Example
+The executable stays in foreground, which is why it's recommended to use a
+process manager such as `systemd` or `supervisord`. Example
 `systemd` service file is included in `debian/service`.
 
 ## Security
@@ -218,7 +220,7 @@ This is the recommended way to install this on Debian systems.
 ## Testing
 
 Use `./run-tests.sh` to execute test suite. It requires `docker compose`
-and `curl`. The script performs an end-to-end integratiot test with a
+and `curl`. The script performs an end-to-end integration test with a
 real Active Directory server and an Nginx reverse proxy.
 
 It spins up necessary containers, sets up example users, and then performs
@@ -246,7 +248,7 @@ server {
         server_name www.example.com;
 
 
-        satisfy all;    # Require 2 auths: auth_gss (Kerberos) for authn and auth_request (LDAP proxy) for authz
+        satisfy all;    # Require 2 auths: auth_gss (Kerberos) for authn and auth_request (ldap_authz_proxy) for authz
 
         auth_gss on;
         auth_gss_keytab /etc/krb5.keytab;
@@ -292,6 +294,102 @@ The VM running Nginx (and ldap_authz_proxy) was joined to AD domain like this:
 
 Script(s) for building Nginx Kerberos (SPNEGO) module for Debian:
 https://github.com/elonen/debian-nginx-spnego
+
+
+### OpenID Connect (OIDC, e.g. Okta)
+
+This example uses [Vouch Proxy](https://github.com/vouch/vouch-proxy) to authenticate against
+an OIDC ID provider (e.g. Okta), and then ldap_authz_proxy to authorize. Again, both authn and authz
+happen transparently on Nginx level; the application itself doesn't know anything about LDAP, OIDC or auth tokens.
+
+This configuration is a bit more complex than the previous ones, because it needs to
+perform two `auth_request` calls: one for OIDC authentication and another for LDAP authorization.
+Nginx doesn't allow multiple `auth_request` calls in the same location, so we need to
+authenticate first, then proxy to another location that performs the authorization and finally
+serves the actual application.
+
+(This doesn't cover Vouch Proxy setup, see other docmentation for that.)
+
+```nginx
+# Phase 1: Authenticate and proxy to Phase 2
+server {
+        listen 443 ssl;
+        ssl_certificate     /etc/ssl/private/example.com.fullchain.pem;
+        ssl_certificate_key /etc/ssl/private/example.com.privkey.pem;
+
+        server_name my-app.example.com;
+
+        error_page 401 = @error401;
+        location @error401 {
+                return 302 https://vouch.example.com/login?url=https://$http_host$request_uri;
+        }
+
+        location = /authn {
+          internal;
+
+          proxy_pass https://vouch.example.com/validate;
+          proxy_pass_request_body off;
+          proxy_set_header Cookie $http_cookie;
+          proxy_set_header Content-Length "";
+
+          # If Vouch Proxy JWT validation returns 401, the error_page above will redirect to login page
+        }
+
+        location = / {
+                # Authn against Vouch Proxy and store results in variables:
+
+                auth_request    /authn;
+                auth_request_set $authn_jwt   $upstream_http_x_vouch_jwt;
+                auth_request_set $authn_user  $upstream_http_x_vouch_user;
+
+                # Pass authenticated username to phase 2:
+
+                proxy_pass http://127.0.0.1:8000;
+                proxy_set_header        X-Authn-User  $authn_user;
+        }
+}
+
+# Phase 2: Authorize and serve the application
+server {
+        listen 127.0.0.1:8000;
+
+        location = /authz {
+            internal;
+            proxy_pass              http://127.0.0.1:10567/ldap_authz_example_app;
+            proxy_pass_request_body off;
+            proxy_set_header        Content-Length "";
+            proxy_set_header        X-Ldap-Authz-Username $http_x_authn_user;
+        }
+
+        location / {
+                # Authz against ldap_authz_proxy.
+                # Note that we already set X-Ldap-Authz-Username in phase 1, from where
+                # ldap_authz_proxy reads it.
+
+                auth_request    /authz;
+                auth_request_set $ldap_displayname  $upstream_http_x_ldap_res_displayname;
+                auth_request_set $ldap_groups       $upstream_http_x_ldap_res_pdugroups;
+
+
+                # Example app: PHP script that gets, in headers, username from Vouch,
+                # and display name + groups from ldap_authz_proxy.
+                #
+                # You could replace this with another proxy_pass to a different app,
+                # or even just serve your top secret static files.
+
+                root /var/www/my-app;
+                index index.php;
+                try_files $uri $uri/ =404;
+                location ~ \.php$ {
+                        include snippets/fastcgi-php.conf;
+                        fastcgi_pass unix:/var/run/php/php7.4-fpm.sock;
+                        fastcgi_param X_REMOTE_USER_ID  $http_x_authn_user;
+                        fastcgi_param X_USER_GROUPS $ldap_groups;
+                        fastcgi_param X_DISPLAY_NAME $ldap_displayname;
+                }
+        }
+}
+```
 
 ## Config option details
 
@@ -431,7 +529,7 @@ Config options:
 Probably the easiest way to develop this is to spin up the LDAP server
 in Docker and then run program locally:
 
-```bash	
+```bash
 # Start test LDAP server
 cd test
 docker compose up --detach
