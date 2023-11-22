@@ -3,21 +3,20 @@
 [![Build Status](https://app.travis-ci.com/elonen/ldap_authz_proxy.svg?branch=master)](https://app.travis-ci.com/elonen/ldap_authz_proxy)
 [![Release](https://img.shields.io/github/v/release/elonen/ldap_authz_proxy?include_prereleases)]()
 
-Secure any HTTP resource (static site, a web app, ...) with LDAP / Active Directory.
-That is, trasparently authorize Nginx users against LDAP, optionally returning attributes.
+Test your HTTP (e.g. Nginx) users' access privileges against LDAP/Active Directory.
+Optionally, pass LDAP user attributes to your HTTP backend app in headers.
 
-Once a user has been authenticated by some other means (e.g. OIDC, Kerberos, Basic auth, Token, ...),
-this server can be used to authorize them to access some resource.
+`ldap_authz_proxy` is a small local HTTP daemon that reads usernames from request headers
+and performs configured LDAP queries with them, returning status 200 if query
+succeeded, or 403 if it failed. It's designed for Nginx ´auth_request`, and other
+HTTP auth proxy mechanisms.
+
+Once a user has been authenticated by some other means (OIDC, Kerberos, Basic auth, Token, ...),
+this daemon can be used to **authorize** them to access some URL.
 
 If one LDAP/Active Directory query is not enough, the program can perform sub-queries to
 allow extra auth conditions, or to fetch more attributes (e.g. group memberships).
-Results are cached for a configurable amount of time.
-
-Technically it's a small HTTP server that reads usernames from request headers
-and performs configured LDAP queries with them, returning status 200 if query
-succeeded or 403 if it failed.
-
-Use Nginx ´auth_request` directive to use this server as an authorization proxy.
+Results are cached for a configurable time.
 
 ## Configuration
 
