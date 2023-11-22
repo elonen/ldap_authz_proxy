@@ -1,2 +1,6 @@
 target/
 Dockerfile
+build-deb-in-docker.sh
+*.deb
+DEB/
+

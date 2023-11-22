@@ -207,7 +207,7 @@ pub(crate) fn parse_config(config_file: &str) -> Result<Vec<ConfigSection>, Erro
         if seen_sections.contains(&section_name) {
             bail!("Duplicate section [{}]", section_name);
         } else {
-            seen_sections.insert(section_name.clone());
+            seen_sections.insert(section_name);
         }
 
         // Check that no unknown keys are set
