@@ -247,27 +247,30 @@ server {
         server_name www.example.com;
 
 
-        satisfy all;    # Require 2 auths: auth_gss (Kerberos) for authn and auth_request (ldap_authz_proxy) for authz
+        satisfy all;    # Require two auths: auth_gss (Kerberos) for authn, and auth_request (ldap_authz_proxy) for authz
 
+        # 1. Authn with Kerberos
         auth_gss on;
         auth_gss_keytab /etc/krb5.keytab;
         auth_gss_realm EXAMPLE.COM;
         auth_gss_force_realm on;
         auth_gss_service_name HTTP/www.example.com;
 
+        # 2. Authz with ldap_authz_proxy
         auth_request     /authz_all;
         auth_request_set $display_name  $upstream_http_x_ldap_res_displayname;
         auth_request_set $extra_groups  $upstream_http_x_ldap_res_extragroups;  # See example .INI
 
+        # (internal endpoint used in step 2. above)
         location = /authz_all {
             internal;
-            proxy_pass              http://127.0.0.1:10567/users;
+            proxy_pass              http://127.0.0.1:10567/users;  # ldap_authz_proxy daemon
             proxy_pass_request_body off;
             proxy_set_header        Content-Length "";
             proxy_set_header        X-Ldap-Authz-Username $remote_user;  # $remote_user is set by auth_gss
         }
 
-
+        # The (fictional) web app
         location /api {
                 proxy_pass http://127.0.0.1:8095/api;
 
@@ -370,7 +373,7 @@ server {
                 auth_request_set $ldap_groups       $upstream_http_x_ldap_res_pdugroups;
 
 
-                # Example app: PHP script that gets, in headers, username from Vouch,
+                # Example app: PHP script that is passed, in headers, username from Vouch,
                 # and display name + groups from ldap_authz_proxy.
                 #
                 # You could replace this with another proxy_pass to a different app,
@@ -549,7 +552,7 @@ kill %1  # Or do: fg + ctrl-c
 cd test
 docker compose down
 cd ..
-git checkout -- example.ini  # Reverse the config
+git checkout -- example.ini  # Revert the config
 ```
 
 ## Contributing
