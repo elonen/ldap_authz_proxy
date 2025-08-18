@@ -1,14 +1,14 @@
-# ldap_authz_proxy - LDAP authorization proxy for authenticated HTTP users
+# ldap_authz_proxy - LDAP authorization proxy for pre-authenticated HTTP users
 
 [![Build Status](https://app.travis-ci.com/elonen/ldap_authz_proxy.svg?branch=master)](https://app.travis-ci.com/elonen/ldap_authz_proxy)
 [![Release](https://img.shields.io/github/v/release/elonen/ldap_authz_proxy?include_prereleases)]()
 
-Test your HTTP (e.g. Nginx) users' access privileges against LDAP/Active Directory.
-Optionally, pass LDAP user attributes to your HTTP backend app in headers.
+- Test your HTTP (e.g. Nginx) users' access privileges against LDAP/Active Directory.
+- Optionally, pass LDAP user attributes to your HTTP backend app in headers.
 
 `ldap_authz_proxy` is a small local HTTP daemon that reads usernames from request headers
 and performs configured LDAP queries with them, returning status 200 if query
-succeeded, or 403 if it failed. It's designed for Nginx ´auth_request`, and other
+succeeded, or 403 if it failed. It's designed for Nginx `auth_request`, and other
 HTTP auth proxy mechanisms.
 
 Once a user has been authenticated by some other means (OIDC, Kerberos, Basic auth, Token, ...),
@@ -17,6 +17,26 @@ this daemon can be used to **authorize** them to access some URL.
 If one LDAP/Active Directory query is not enough, the program can perform sub-queries to
 allow extra auth conditions, or to fetch more attributes (e.g. group memberships).
 Results are cached for a configurable time.
+
+```mermaid
+sequenceDiagram
+  participant User
+  participant Nginx
+  participant Auth as Auth Provider
+  participant Proxy as ldap_authz_proxy
+  participant LDAP as LDAP Server
+
+  User->>Nginx: HTTP request
+  Nginx->>Auth: Authenticate by OAuth2, Basic auth, Spnego etc.
+  Auth-->>Nginx: Auth OK with username
+  Nginx->>Proxy: Authorize username
+  Proxy->>LDAP: Cached LDAP query/queries for user
+  LDAP-->>Proxy: LDAP entries and attributes
+  Proxy-->>Nginx: 200 or 403 with LDAP attributes
+  Nginx-->>User: HTTP response
+```
+
+For an overview on what happens internally, see flowchart [Detailed request flowchart](#detailed-request-flowchart)
 
 ## Configuration
 
@@ -554,6 +574,67 @@ docker compose down
 cd ..
 git checkout -- example.ini  # Revert the config
 ```
+
+## Detailed request flowchart
+
+```mermaid
+flowchart TD
+  A[Client or reverse proxy or app] --> P
+
+  subgraph ldap_authz_proxy
+    direction TB
+    P[Incoming HTTP request
+URI example: /admins
+Header example: X-Ldap-Authz-Username = alice]
+
+    P --> C{Cache hit?}
+    C -->|yes| R[Return cached decision and attributes]
+    C -->|no| MQ[Build main LDAP query using ldap_query, USERNAME, and query_vars]
+
+    MQ --> L[LDAP server]
+    L --> M{Main query returned entries?}
+    L -.->|LDAP error| F1[DENY 403]
+
+    M -->|no| F2[DENY 403]
+    M -->|yes| J{sub_query_join}
+
+    J -->|Main| ENRICH[Run sub_queries only to add attributes]
+    J -->|Any| ANY[Run sub_queries until one succeeds]
+    J -->|All| ALL[Run all sub_queries and each must succeed]
+
+    ENRICH --> SQ[LDAP server]
+    ANY --> SQ
+    ALL --> SQ
+
+    SQ -.->|LDAP error in sub_query| F3[DENY 403]
+
+    ENRICH --> ATTR[Collect attributes from main and subs and set_attribs_on_success]
+
+    ANY --> ACHK{Any sub_query succeeded?}
+    ACHK -->|no| F4[DENY 403]
+    ACHK -->|yes| ATTR
+
+    ALL --> LCHK{All sub_queries succeeded?}
+    LCHK -->|no| F5[DENY 403]
+    LCHK -->|yes| ATTR
+
+    ATTR --> D[Deduplicate values if enabled
+Join multi values using attrib_delimiter]
+    D --> K[Store decision and attributes in cache
+cache_size and cache_time
+Note: hierarchical caching]
+    K --> OK[ALLOW 200 and return attributes in response headers]
+  end
+
+  R --> OUT[HTTP response]
+  F1 --> OUT
+  F2 --> OUT
+  F3 --> OUT
+  F4 --> OUT
+  F5 --> OUT
+  OK --> OUT
+```
+
 
 ## Contributing
 
