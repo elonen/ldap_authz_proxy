@@ -1,0 +1,15 @@
+/var/log/ldap_authz_proxy.log {
+    monthly
+    size 100M
+    rotate 12
+    compress
+    delaycompress
+    missingok
+    notifempty
+    create 660 root www-data
+    postrotate
+        if /bin/systemctl is-active --quiet ldap_authz_proxy.service; then
+            /bin/systemctl restart ldap_authz_proxy.service
+        fi
+    endscript
+}
