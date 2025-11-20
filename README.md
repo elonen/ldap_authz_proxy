@@ -1,6 +1,6 @@
 # ldap_authz_proxy - LDAP authorization proxy for pre-authenticated HTTP users
 
-[![Build Status](https://app.travis-ci.com/elonen/ldap_authz_proxy.svg?branch=master)](https://app.travis-ci.com/elonen/ldap_authz_proxy)
+[![Build and test](https://github.com/elonen/ldap_authz_proxy/actions/workflows/docker-test.yml/badge.svg)](https://github.com/elonen/ldap_authz_proxy/actions/workflows/docker-test.yml)
 [![Release](https://img.shields.io/github/v/release/elonen/ldap_authz_proxy?include_prereleases)]()
 
 - Test your HTTP (e.g. Nginx) users' access privileges against LDAP/Active Directory.
