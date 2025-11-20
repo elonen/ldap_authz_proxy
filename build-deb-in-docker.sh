@@ -11,7 +11,7 @@ EOF
 }
 
 for ARCH in amd64 arm64; do
-for DEBIAN_VER in bookworm bullseye; do
+for DEBIAN_VER in bookworm bullseye trixie; do
 if  is_arch_supported $ARCH $DEBIAN_VER; then
     echo "=== Building for $DEBIAN_VER:$ARCH ==="
     IMG="ldap_authz_proxy-deb_${ARCH}:latest"

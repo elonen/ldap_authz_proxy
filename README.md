@@ -643,7 +643,7 @@ Contributions are very welcome.
 
 ## License
 
-Copyright 2023 by Jarno Elonen.
+Copyright 2023-2025 by Jarno Elonen.
 
 The project is dual licensed under the terms of the Apache License, Version 2.0, and the MIT License.
 See LICENSE-APACHE and LICENSE-MIT for details.

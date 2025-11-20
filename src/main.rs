@@ -9,7 +9,10 @@ use config::ConfigSection;
 use hyper::header::HeaderName;
 use hyper::http::HeaderValue;
 use hyper::service::service_fn;
-use hyper::{Request, Response, Body, StatusCode};
+use hyper::{Request, Response, StatusCode};
+use http_body_util::Full;
+use hyper::body::Bytes;
+use hyper_util::rt::TokioIo;
 use rand::random;
 use tokio::net::TcpListener;
 use docopt::Docopt;
@@ -140,7 +143,7 @@ async fn ldap_query(
         ldap3::drive!(conn);
 
         let bind_dn = conf.ldap_bind_dn.as_str();
-        let bind_pw = conf.ldap_bind_password.expose_secret().as_str();
+        let bind_pw = conf.ldap_bind_password.expose_secret();
 
         ldap.simple_bind(bind_dn, bind_pw).await?.success()?;
 
@@ -279,7 +282,7 @@ async fn ldap_query(
 
 /// Unified HTTP handeler for all URI paths.
 /// Matches path against regexp in every config section and uses the first match.
-async fn http_handler(req: Request<Body>, ctx: Arc<ReqContext>) -> Result<Response<Body>, hyper::http::Error>
+async fn http_handler(req: Request<impl hyper::body::Body + 'static>, ctx: Arc<ReqContext>) -> Result<Response<Full<Bytes>>, hyper::http::Error>
 {
     let req_id = ctx.req_id.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
 
@@ -298,7 +301,7 @@ async fn http_handler(req: Request<Body>, ctx: Arc<ReqContext>) -> Result<Respon
         None => {
             let msg = format!("404 Not Found - No matching config section for: {}", req.uri().path());
             span.in_scope(|| { tracing::error!(msg); });
-            return Ok(Response::builder().status(StatusCode::NOT_FOUND).body(Body::from(msg))?)
+            return Ok(Response::builder().status(StatusCode::NOT_FOUND).body(Full::new(Bytes::from(msg)))?)
         }
     };
     let span = span.record("section", conf.section.as_str());
@@ -307,18 +310,33 @@ async fn http_handler(req: Request<Body>, ctx: Arc<ReqContext>) -> Result<Respon
     let username = match req.headers().get(conf.username_http_header.as_str()) {
         Some(username) => {
             match username.to_str() {
-                Ok(username) => username,
+                Ok(username) => {
+                    let username = if conf.username_split_on_comma {
+                        // Split on comma and take only the first value.
+                        // This handles cases where upstream proxy misconfigures header forwarding
+                        // and sends comma-separated duplicates like "user, user".
+                        username.split(',').next().unwrap_or(username).trim()
+                    } else {
+                        username
+                    };
+                    if username.is_empty() {
+                        let msg = format!("400 Bad Request - Empty username in HTTP header: {}", conf.username_http_header);
+                        span.in_scope(|| { tracing::error!("{}", msg); });
+                        return Response::builder().status(StatusCode::BAD_REQUEST).body(Full::new(Bytes::from(msg)))
+                    }
+                    username
+                },
                 Err(_) => {
                     let msg = format!("400 Bad Request - Invalid HTTP header: {}", conf.username_http_header);
                     span.in_scope(|| { tracing::error!("{}", msg); });
-                    return Response::builder().status(StatusCode::BAD_REQUEST).body(Body::from(msg))
+                    return Response::builder().status(StatusCode::BAD_REQUEST).body(Full::new(Bytes::from(msg)))
                 }
             }
         },
         None => {
             let msg = format!("400 Bad Request - Missing HTTP header: {}", conf.username_http_header);
             span.in_scope(|| { tracing::error!("{}", msg); });
-            return Response::builder().status(StatusCode::BAD_REQUEST).body(Body::from(msg))
+            return Response::builder().status(StatusCode::BAD_REQUEST).body(Full::new(Bytes::from(msg)))
         }
     };
     let span = span.record("user", username);
@@ -339,13 +357,13 @@ async fn http_handler(req: Request<Body>, ctx: Arc<ReqContext>) -> Result<Respon
     match ldap_res {
         Err(e) => {
             span.in_scope(|| { tracing::error!("LDAP error: {:?}", e); });
-            return Response::builder().status(StatusCode::BAD_GATEWAY).body(Body::from("LDAP error"))
+            return Response::builder().status(StatusCode::BAD_GATEWAY).body(Full::new(Bytes::from("LDAP error")))
         },
         Ok(la) => {
             let span = span.record("cached", &la.cached);
             if let Some(ldap_res) = la.ldap_res {
                 span.in_scope(|| { tracing::info!("Authorized Ok"); });
-                let mut resp = Response::new(Body::from("200 OK - LDAP result found"));
+                let mut resp = Response::new(Full::new(Bytes::from("200 OK - LDAP result found")));
 
                 // Store LDAP result attributes to response HTTP headers
                 for (key, val) in ldap_res {
@@ -355,14 +373,14 @@ async fn http_handler(req: Request<Body>, ctx: Arc<ReqContext>) -> Result<Respon
                         Ok(hname) => hname,
                         Err(_) => {
                             span.in_scope(|| { tracing::error!("Invalid LDAP result key: {}", key); });
-                            return Response::builder().status(StatusCode::INTERNAL_SERVER_ERROR).body(Body::from("Invalid LDAP result key"))
+                            return Response::builder().status(StatusCode::INTERNAL_SERVER_ERROR).body(Full::new(Bytes::from("Invalid LDAP result key")))
                         }
                     };
                     let hval = match HeaderValue::from_str(val.as_str()) {
                         Ok(hval) => hval,
                         Err(_) => {
                             span.in_scope(|| { tracing::error!("Invalid LDAP result value: {}", val); });
-                            return Response::builder().status(StatusCode::INTERNAL_SERVER_ERROR).body(Body::from("Invalid LDAP result value"))
+                            return Response::builder().status(StatusCode::INTERNAL_SERVER_ERROR).body(Full::new(Bytes::from("Invalid LDAP result value")))
                         }
                     };
                     span.in_scope(|| { tracing::debug!("Adding  header: {:?} = {:?}", hname, hval); });
@@ -374,7 +392,7 @@ async fn http_handler(req: Request<Body>, ctx: Arc<ReqContext>) -> Result<Respon
                 span.in_scope(|| { tracing::info!("Authorization denied"); });
                 Response::builder().status(StatusCode::FORBIDDEN)
                 .header("X-LDAP-CACHED", HeaderValue::from_str(if la.cached { "1" } else { "0" }).unwrap())
-                .body(Body::from(format!("403 Forbidden - Empty LDAP result for user '{:?}'", username)))
+                .body(Full::new(Bytes::from(format!("403 Forbidden - Empty LDAP result for user '{:?}'", username))))
             }
         }
     }
@@ -484,8 +502,9 @@ pub async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>>
             let (stream, _) = listener.accept().await?;
             let ctx = request_context.clone();
             tokio::task::spawn(async move   {
-                if let Err(err) = hyper::server::conn::Http::new()
-                    .serve_connection(stream, service_fn(|req| http_handler(req, Arc::clone(&ctx))))
+                let io = TokioIo::new(stream);
+                if let Err(err) = hyper::server::conn::http1::Builder::new()
+                    .serve_connection(io, service_fn(|req| http_handler(req, Arc::clone(&ctx))))
                     .await {
                         tracing::error!("server error: {}", err);
                 }
@@ -511,7 +530,7 @@ pub async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>>
             .method("GET")
             .uri(format!("http://localhost:{}/{}", port, uri_path))
             .header(conf.username_http_header.clone() , username)
-            .body(Body::empty())?;
+            .body(Full::new(Bytes::new()))?;
 
         match http_handler(req, ctx).await {
             Ok(resp) => {

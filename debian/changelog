@@ -1,3 +1,10 @@
+ldap_authz_proxy (0.3.2-1) unstable; urgency=low
+
+  * Add support for Trixie builds
+  * Upgrade dependencies to latest versions
+
+ -- Jarno Elonen <elonen@iki.fi>  Wed, 20 Nov 2025 00:00:00 +0000
+
 ldap_authz_proxy (0.3.1-1) unstable; urgency=low
 
   * Bugfix: attribute joining in sub-query results

@@ -112,6 +112,10 @@ config_options! {
         "Never matched if empty. If you need to match all paths, use '^'.\n",
         "If multiple sections match, the first one is used."),
     username_http_header: String = Some("X-Ldap-Authz-Username"); "HTTP header to use for the username",
+    username_split_on_comma: bool = Some("true"); concat!(
+        "If true, split the username header value on comma and use only the first part.\n",
+        "This handles cases where upstream proxy misconfigures header forwarding and\n",
+        "sends comma-separated duplicates like 'user, user'. Default: true"),
 
     ldap_server_url: String = None; "URL of the LDAP server (e.g. 'ldaps://ldap.example.com:636')",
     ldap_conn_timeout: f32 = Some("10.0"); "LDAP connection timeout in seconds",
@@ -201,7 +205,14 @@ pub(crate) fn parse_config(config_file: &str) -> Result<Vec<ConfigSection>, Erro
     for (section_name, sect_props) in ini.iter_mut() {
         let section_name = match section_name {
             Some(name) => name,
-            None => { bail!("Options outside of a section are not allowed"); }
+            None => {
+                // Skip the implicit section for properties before any explicit section header
+                // (rust-ini 0.21+ includes this in the iterator)
+                if sect_props.is_empty() {
+                    continue;
+                }
+                bail!("Options outside of a section are not allowed");
+            }
         };
 
         if seen_sections.contains(&section_name) {
@@ -290,6 +301,7 @@ pub(crate) fn parse_config(config_file: &str) -> Result<Vec<ConfigSection>, Erro
             section: section_name.to_string(),
             http_path: http_path_re,
             username_http_header: get("username_http_header"),
+            username_split_on_comma: get("username_split_on_comma").parse().or_else(|_| Err(parse_err("username_split_on_comma")))?,
 
             ldap_server_url: get("ldap_server_url"),
             ldap_conn_timeout: get("ldap_conn_timeout").parse().or_else(|_| Err(parse_err("ldap_conn_timeout")))?,

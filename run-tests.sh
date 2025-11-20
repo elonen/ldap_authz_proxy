@@ -72,7 +72,7 @@ function test_offline() {
     URI="$1"
     USER="$2"
     EXPECTED_CODE="$3"
-    EXIT_CODE=$(docker compose exec www  target/debug/ldap_authz_proxy --test example.ini $USER $URI | grep -o "HTTP [0-9]*")
+    EXIT_CODE=$(docker compose exec www  target/debug/ldap_authz_proxy --test example.ini "$USER" "$URI" | grep -o "HTTP [0-9]*")
     if [ "$EXIT_CODE" = "HTTP $EXPECTED_CODE" ]; then
         echo "Test OK for --test test with '$URI' with '$USER'"
     else
@@ -99,7 +99,13 @@ function do_tests() {
 
     # Test username quoting with malicious characters, should give 401, not 500
     test "user-page"  ")=&%)):password" "401 c eg:"
-    
+
+    # Test comma-separated username (simulating misconfigured proxy header forwarding)
+    # The default config has username_split_on_comma=true, so it should split and use only "alice"
+    echo "-- Test comma-separated username handling"
+    test_offline "/users"   "alice, alice"   200
+    test_offline "/admins"  "bob, bob"       403
+
     echo "-- Repeat and check that query came from cache"
     test "user-page"  "alice:alice123" "200Alice Alison c1 eg:beta_tester"
     test "admin-page" "alice:alice123" "200 c1 eg:show_debug_info"
