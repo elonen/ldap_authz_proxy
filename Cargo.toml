@@ -47,7 +47,7 @@ anyhow = "1.0.68"
 async-recursion = "1.0.2"
 docopt = "1.1.1"
 hyper = { version = "1.8.1", features = ["full"] }
-hyper-util = { version = "0.1.9", features = ["tokio"] }
+hyper-util = { version = "0.1.19", features = ["tokio"] }
 http-body-util = "0.1"
 ldap3 = "0.12.1"
 lru_time_cache = "0.11.11"
