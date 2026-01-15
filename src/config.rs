@@ -128,7 +128,8 @@ config_options! {
 
     query_vars [MULTILINE]: HashMap<String, String> = Some(""); concat!(
         "Extra variables to use in the query, in addition to %USERNAME%.\n",
-        "You can use these to avoid repeating long query strings in different sections.\n",
+        "You can use these to avoid duplicating long query strings in different sections.\n",
+        "Repeat this config line to set multiple different parameters.\n",
         "\n",
         "Unlike %USERNAME%, these are NOT quoted, so you can also use them to add\n",
         "extra filters to the query (e.g. '(memberOf=group1)').",
@@ -170,7 +171,7 @@ config_options! {
 }
 
 /// Parse the configuration file
-/// 
+///
 /// Returns a vector of ConfigSections, excluding the [default] section, which
 /// is used to fill in missing values in the other sections.
 pub(crate) fn parse_config(config_file: &str) -> Result<Vec<ConfigSection>, Error>
@@ -236,7 +237,7 @@ pub(crate) fn parse_config(config_file: &str) -> Result<Vec<ConfigSection>, Erro
                 bail!("Key '{}' (in section [{}]) defined mutiple times. This is allowed only for list options.", key, section_name);
             }
         }
-        
+
         if section_name == "default" {
             continue;
         }

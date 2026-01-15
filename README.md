@@ -484,7 +484,8 @@ Config options:
   query_vars (+)  [default: '']
 
     Extra variables to use in the query, in addition to %USERNAME%.
-    You can use these to avoid repeating long query strings in different sections.
+    You can use these to avoid duplicating long query strings in different sections.
+    Repeat this config line to set multiple different parameters.
 
     Unlike %USERNAME%, these are NOT quoted, so you can also use them to add
     extra filters to the query (e.g. '(memberOf=group1)').
