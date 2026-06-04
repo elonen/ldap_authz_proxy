@@ -1,3 +1,9 @@
+ldap_authz_proxy (0.3.3-1) unstable; urgency=low
+
+  * Upgrade dependencies to latest versions (incl. sha2 0.11, tokio 1.52, hyper 1.9)
+
+ -- Jarno Elonen <elonen@iki.fi>  Thu, 04 Jun 2026 00:00:00 +0000
+
 ldap_authz_proxy (0.3.2-1) unstable; urgency=low
 
   * Add support for Trixie builds
