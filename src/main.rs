@@ -63,7 +63,7 @@ Options:
     -v --version         Show version.
 "#;
 
-type Sha256Hash = sha2::digest::generic_array::GenericArray<u8, sha2::digest::generic_array::typenum::U32>;
+type Sha256Hash = sha2::digest::Output<Sha256>;
 type LdapSearchRes = Option<HashMap<String, Vec<String>>>;
 type LdapCache = LruCache<Sha256Hash, LdapSearchRes>;
 
