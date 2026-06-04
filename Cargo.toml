@@ -58,5 +58,5 @@ secrecy = "0.10.3"
 sha2 = "0.10.6"
 tokio = { version = "1.52.2", features = ["full"] }
 tracing = "0.1.44"
-tracing-appender = "0.2.4"
+tracing-appender = "0.2.5"
 tracing-subscriber = {version = "0.3.22", features = ["env-filter", "json"] }
