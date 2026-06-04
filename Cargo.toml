@@ -46,17 +46,17 @@ lto = true
 anyhow = "1.0.102"
 async-recursion = "1.0.2"
 docopt = "1.1.1"
-hyper = { version = "1.8.1", features = ["full"] }
+hyper = { version = "1.9.0", features = ["full"] }
 hyper-util = { version = "0.1.20", features = ["tokio"] }
 http-body-util = "0.1"
 ldap3 = "0.12.1"
 lru_time_cache = "0.11.11"
-rand = "0.10.0"
+rand = "0.10.1"
 regex = "1.12.3"
 rust-ini = "0.21.3"
 secrecy = "0.10.3"
 sha2 = "0.11.0"
-tokio = { version = "1.49.0", features = ["full"] }
+tokio = { version = "1.52.2", features = ["full"] }
 tracing = "0.1.44"
-tracing-appender = "0.2.4"
-tracing-subscriber = {version = "0.3.22", features = ["env-filter", "json"] }
+tracing-appender = "0.2.5"
+tracing-subscriber = {version = "0.3.23", features = ["env-filter", "json"] }
