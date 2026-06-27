@@ -1,3 +1,14 @@
+ldap_authz_proxy (0.4.0-1) unstable; urgency=low
+
+  * Switch LDAP TLS backend from OpenSSL (native-tls) to rustls; OpenSSL is
+    no longer a build or runtime dependency
+  * Build statically-linked musl binaries: the .deb packages no longer depend
+    on any shared libraries and install on any Debian/Ubuntu release (one
+    package per architecture instead of one per distribution version)
+  * Update Docker build images to Debian Trixie
+
+ -- Jarno Elonen <elonen@iki.fi>  Sat, 27 Jun 2026 00:00:00 +0000
+
 ldap_authz_proxy (0.3.3-1) unstable; urgency=low
 
   * Upgrade dependencies to latest versions (incl. sha2 0.11, tokio 1.52, hyper 1.9)

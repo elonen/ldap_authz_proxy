@@ -159,6 +159,14 @@ was served from cache, and `0` if it was a fresh query.
 The server is written in Rust and can be manually built with `cargo build --release`.
 Resulting binary is `target/release/ldap_authz_proxy`.
 
+For a fully static, dependency-free binary, build against musl, e.g.:
+
+    rustup target add x86_64-unknown-linux-musl    # or aarch64-unknown-linux-musl
+    cargo build --release --target x86_64-unknown-linux-musl
+
+TLS (for `ldaps://`) is handled by [rustls](https://github.com/rustls/rustls),
+so there is no OpenSSL build or runtime dependency.
+
 If you want Debian packages instead (recommended), see below.
 
 ## Running
@@ -228,8 +236,16 @@ HTTP headers and performs LDAP queries with them.
 
 ## Packaging
 
-The server can be packaged for Debian variants with `./build-deb-in-docker.sh`
-(or to build locally, `cargo install cargo-deb && cargo deb`).
+Build the Debian packages with `./build-deb-in-docker.sh`. This produces one
+statically-linked (musl) `.deb` per architecture (amd64, arm64). As the binary
+has no shared-library dependencies, a single package installs on any Debian or
+Ubuntu release, regardless of version.
+
+To build a single target locally instead:
+
+    cargo install cargo-deb
+    rustup target add x86_64-unknown-linux-musl    # or aarch64-unknown-linux-musl
+    cargo deb --target x86_64-unknown-linux-musl
 
 To install, issue `dpkg -i ldap-authz-proxy_*.deb`, edit `/etc/ldap_authz_proxy.conf` to
 your liking, and then enable the service by `systemctl enable ldap_authz_proxy.service`.

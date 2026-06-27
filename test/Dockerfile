@@ -1,9 +1,9 @@
-FROM rust:1-slim-bookworm
+FROM rust:1-slim-trixie
 
 RUN set -eux; \
     apt-get update; \
     apt-get install -y \
-        libssl-dev pkg-config iputils-ping psmisc vim less
+        iputils-ping psmisc vim less
 
 RUN set -eux; \
     apt-get update; \

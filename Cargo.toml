@@ -1,6 +1,6 @@
 [package]
 name = "ldap_authz_proxy"
-version = "0.3.3"
+version = "0.4.0"
 edition = "2021"
 
 description = "LDAP authorization proxy for authenticated HTTP users"
@@ -16,7 +16,8 @@ copyright = "2023, Jarno Elonen <elonen@iki.fi>"
 section = "unknown"
 changelog = "debian/changelog"
 
-depends = "$auto"
+# Statically linked (musl) binary -> no shared-library dependencies.
+depends = ""
 
 extended-description = """\
 LDAP authorization server/proxy for use with (e.g.) Nginx.
@@ -49,7 +50,7 @@ docopt = "1.1.1"
 hyper = { version = "1.9.0", features = ["full"] }
 hyper-util = { version = "0.1.20", features = ["tokio"] }
 http-body-util = "0.1"
-ldap3 = "0.12.1"
+ldap3 = { version = "0.12.1", default-features = false, features = ["tls-rustls-ring"] }
 lru_time_cache = "0.11.11"
 rand = "0.10.1"
 regex = "1.12.3"
