@@ -54,7 +54,7 @@ jobs:
       - uses: actions/checkout@v7
 
       - name: Download artifacts (both arches)
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           pattern: debian-packages-*
           merge-multiple: true
