@@ -1,0 +1,84 @@
+name: Release (.deb packages)
+
+on:
+  push:
+    tags:
+      - 'v*'  # Trigger on version tags like v0.4.0
+  workflow_dispatch:  # Allow manual rebuilds (no GitHub release is created)
+
+jobs:
+  # Run the integration test suite first; only release if it passes.
+  test:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v7
+    - name: Run integration test suite
+      run: BUILDKIT_PROGRESS=plain ./run-tests.sh
+
+  build-debian-package:
+    needs: test
+    # One native runner per arch (no QEMU emulation needed).
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            runner: ubuntu-24.04
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
+
+    steps:
+    - uses: actions/checkout@v7
+
+    - name: Build static musl .deb (${{ matrix.arch }}, native)
+      run: ./build-deb-in-docker.sh ${{ matrix.arch }}
+
+    - name: List built packages
+      run: ls -la *.deb
+
+    - name: Upload Debian package
+      uses: actions/upload-artifact@v4
+      with:
+        name: debian-packages-${{ matrix.arch }}
+        path: ./*.deb
+        retention-days: 90
+
+  create-release:
+    needs: build-debian-package
+    if: startsWith(github.ref, 'refs/tags/')  # only on a real v* tag, not manual dispatch
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write  # needed to create the GitHub release
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Download artifacts (both arches)
+        uses: actions/download-artifact@v4
+        with:
+          pattern: debian-packages-*
+          merge-multiple: true
+          path: dist_deb
+
+      - name: Generate release notes
+        run: |
+          echo "## Debian packages" >> release_notes.md
+          echo "Statically linked (musl) packages, one per architecture." >> release_notes.md
+          echo "They have no shared-library dependencies and install on any Debian/Ubuntu release:" >> release_notes.md
+          echo "" >> release_notes.md
+          for file in dist_deb/*.deb; do
+            [ -f "$file" ] && echo "- $(basename "$file")" >> release_notes.md
+          done
+          echo "" >> release_notes.md
+          echo "## Installation" >> release_notes.md
+          echo '```bash' >> release_notes.md
+          echo 'sudo dpkg -i ldap-authz-proxy_*.deb' >> release_notes.md
+          echo '```' >> release_notes.md
+
+      - name: Create release and upload assets
+        uses: softprops/action-gh-release@v2
+        with:
+          draft: true
+          files: dist_deb/*.deb
+          body_path: release_notes.md
+          generate_release_notes: true

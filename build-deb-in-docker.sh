@@ -13,8 +13,15 @@ is_arch_supported() {
 EOF
 }
 
+# Build all architectures by default, or only those named on the command line
+# (used by CI to build one arch per native runner, avoiding emulation).
+ARCHES=("$@")
+if [ ${#ARCHES[@]} -eq 0 ]; then
+    ARCHES=(amd64 arm64)
+fi
+
 FAILED=()
-for ARCH in amd64 arm64; do
+for ARCH in "${ARCHES[@]}"; do
     case $ARCH in
         amd64) RUST_TARGET=x86_64-unknown-linux-musl ;;
         arm64) RUST_TARGET=aarch64-unknown-linux-musl ;;
@@ -40,7 +47,7 @@ for ARCH in amd64 arm64; do
 
             echo "============ Done. Built static binary: ============"
             file target/${RUST_TARGET}/release/ldap_authz_proxy || true
-    EOF
+EOF
     ); then
         echo "!!! Build FAILED for $ARCH"
         FAILED+=("$ARCH")
